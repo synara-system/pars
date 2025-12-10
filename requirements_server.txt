@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+aiohttp
+requests
+selenium
+webdriver-manager
+pydantic
+python-dotenv
+pdfkit
+jinja2
+beautifulsoup4

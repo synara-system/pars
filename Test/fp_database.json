@@ -1,0 +1,4 @@
+
+[
+{"category": "SQLI", "message": "__challenge_"},{"category": "RCE_SSRF", "message": "challenge-container"},{"category": "RCE_SSRF", "message": "worker.js"}
+]
