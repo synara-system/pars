@@ -8,6 +8,7 @@ pip install pillow
 
 
 Docker Kurulum
+py -m pip install requests customtkinter pillow
 git add .
 git commit -m "Pars API sunucu yapisi ve Dockerfile eklendi"
 git push origin main

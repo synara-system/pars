@@ -1,23 +1,17 @@
 # path: core/api_client.py
-# PARS API İstemcisi - GUI ile Bulut Sunucu arasındaki köprü.
+# PARS API İstemcisi - V2.2
 
 import requests
 import json
 import time
 
 class PARSClient:
-    """
-    Render.com üzerindeki PARS API ile iletişim kuran istemci sınıfı.
-    """
-    
     def __init__(self, api_base_url, api_key=None):
-        # URL sonundaki / işaretini temizle
         self.base_url = api_base_url.rstrip('/')
         self.api_key = api_key
         self.current_scan_id = None
         
     def check_connection(self):
-        """Sunucuya erişim var mı kontrol eder."""
         try:
             resp = requests.get(f"{self.base_url}/", timeout=10)
             return resp.status_code == 200
@@ -26,14 +20,12 @@ class PARSClient:
             return False
 
     def start_scan(self, target_url, profile="BUG_BOUNTY_CORE"):
-        """Yeni bir tarama başlatır."""
         endpoint = f"{self.base_url}/scan/start"
         payload = {
             "target_url": target_url,
             "profile": profile,
             "api_key": self.api_key
         }
-        
         try:
             resp = requests.post(endpoint, json=payload, timeout=10)
             if resp.status_code == 200:
@@ -46,33 +38,36 @@ class PARSClient:
             raise Exception(f"Tarama başlatılamadı: {e}")
 
     def get_status(self):
-        """Mevcut taramanın durumunu çeker."""
-        if not self.current_scan_id:
-            return None
-            
+        if not self.current_scan_id: return None
         endpoint = f"{self.base_url}/scan/{self.current_scan_id}/status"
-        
         try:
             resp = requests.get(endpoint, timeout=5)
-            if resp.status_code == 200:
-                return resp.json() # ScanStatus modelini döner
-            else:
-                return None
-        except Exception:
-            return None
+            if resp.status_code == 200: return resp.json()
+            else: return None
+        except Exception: return None
             
     def get_results(self):
-        """Tarama sonuçlarını çeker."""
-        if not self.current_scan_id:
-            return []
-            
+        if not self.current_scan_id: return []
         endpoint = f"{self.base_url}/scan/{self.current_scan_id}/results"
-        
         try:
             resp = requests.get(endpoint, timeout=10)
+            if resp.status_code == 200: return resp.json().get("results", [])
+            else: return []
+        except Exception: return []
+
+    # --- YENİ AI METODU ---
+    def ask_ai(self, prompt, context_scan_id=None):
+        """Sunucudaki AI modülüne soru sorar."""
+        endpoint = f"{self.base_url}/ai/analyze"
+        payload = {
+            "prompt": prompt,
+            "context_scan_id": context_scan_id # Varsa bu ID'nin sonuçlarını analiz eder
+        }
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=60) # AI yavaş olabilir, timeout yüksek
             if resp.status_code == 200:
-                return resp.json().get("results", [])
+                return resp.json().get("response", "Cevap yok.")
             else:
-                return []
-        except Exception:
-            return []
+                return f"AI Hatası: {resp.text}"
+        except Exception as e:
+            return f"Bağlantı Hatası: {e}"

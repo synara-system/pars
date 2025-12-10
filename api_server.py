@@ -1,27 +1,19 @@
 # path: api_server.py
-# Synara PARS - Profesyonel API Sunucusu (FastAPI)
-# MESTEG TEKNOLOJİ | Enterprise Security Core
-# V2.1 GÜNCELLEMESİ: Log kaybını önlemek için liste tabanlı loglama.
+# Synara PARS - Enterprise API (V2.2 - AI Support)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 import uuid
 import os
 import sys
-import threading
 import asyncio
 
-# Core modülleri yola ekle
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from core.engine import SynaraScannerEngine, SCAN_PROFILES
+from core.ai_analyst import AIAnalyst # YENİ IMPORT
 
-app = FastAPI(
-    title="PARS Security API",
-    description="Pentest Autonomous Recon System - Enterprise API",
-    version="2.1.0"
-)
+app = FastAPI(title="PARS Security API", version="2.2.0")
 
 # --- Veri Modelleri ---
 class ScanRequest(BaseModel):
@@ -35,17 +27,19 @@ class ScanStatus(BaseModel):
     progress: float
     score: float
     findings_count: int
-    logs: List[str] # GÜNCELLENDİ: Tek satır yerine liste dönüyor
+    logs: List[str]
+
+class AIRequest(BaseModel):
+    prompt: str
+    context_scan_id: Optional[str] = None # Hangi tarama ile ilgili olduğu
 
 # --- Bellek İçi Veritabanı ---
 ACTIVE_SCANS = {}
 
-# --- Yardımcı Fonksiyonlar ---
-
+# --- Logger (Değişmedi) ---
 def _headless_logger(scan_id: str, message: str, level: str):
     if scan_id in ACTIVE_SCANS:
         log_entry = f"[{level}] {message}"
-        # Logları listeye ekle (Sınırsız değil, son 500 logu tutalım)
         ACTIVE_SCANS[scan_id]["logs"].append(log_entry)
         if len(ACTIVE_SCANS[scan_id]["logs"]) > 500:
              ACTIVE_SCANS[scan_id]["logs"].pop(0)
@@ -79,13 +73,12 @@ def run_scan_background(scan_id: str, url: str, profile: str):
 
 @app.get("/")
 def root():
-    return {"system": "PARS Security Core", "status": "online", "version": "v2.1 Enterprise"}
+    return {"system": "PARS Security Core", "status": "online", "version": "v2.2 AI-Enabled"}
 
 @app.post("/scan/start", response_model=Dict[str, str])
 def start_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     if request.profile not in SCAN_PROFILES:
         raise HTTPException(status_code=400, detail="Geçersiz tarama profili.")
-        
     scan_id = str(uuid.uuid4())
     ACTIVE_SCANS[scan_id] = {
         "target": request.target_url,
@@ -103,22 +96,14 @@ def start_scan(request: ScanRequest, background_tasks: BackgroundTasks):
 def get_scan_status(scan_id: str):
     if scan_id not in ACTIVE_SCANS:
         raise HTTPException(status_code=404, detail="Tarama bulunamadı.")
-    
-    scan_data = ACTIVE_SCANS[scan_id]
-    engine = scan_data.get("engine")
+    data = ACTIVE_SCANS[scan_id]
+    engine = data.get("engine")
     findings_count = len(engine.results) if engine else 0
-    if engine: scan_data["score"] = engine.score
-
-    # Son 50 logu döndür (Hepsini döndürmek ağı olabilir, GUI sonuncuları alıp birleştirsin)
-    recent_logs = scan_data["logs"][-50:] if scan_data["logs"] else []
-
+    if engine: data["score"] = engine.score
+    recent_logs = data["logs"][-50:] if data["logs"] else []
     return ScanStatus(
-        scan_id=scan_id,
-        status=scan_data["status"],
-        progress=scan_data["progress"],
-        score=scan_data["score"],
-        findings_count=findings_count,
-        logs=recent_logs # GÜNCELLENDİ: Liste dönüyor
+        scan_id=scan_id, status=data["status"], progress=data["progress"],
+        score=data["score"], findings_count=findings_count, logs=recent_logs
     )
 
 @app.get("/scan/{scan_id}/results")
@@ -127,3 +112,34 @@ def get_scan_results(scan_id: str):
         raise HTTPException(status_code=404, detail="Tarama bulunamadı.")
     engine = ACTIVE_SCANS[scan_id].get("engine")
     return {"results": engine.results if engine else []}
+
+# --- YENİ AI ENDPOINT ---
+@app.post("/ai/analyze")
+async def analyze_with_ai(request: AIRequest):
+    """
+    Yapay zeka analizi yapar. 
+    Eğer context_scan_id verilirse o taramanın sonuçlarını kullanır,
+    yoksa sadece prompt'u chat olarak işler.
+    """
+    
+    # Sunucu tarafında dummy bir logger kullanalım
+    dummy_logger = lambda msg, lvl: print(f"[AI] {msg}")
+    analyst = AIAnalyst(dummy_logger)
+    
+    # 1. Chat Modu (Sadece soru sorma)
+    if not request.context_scan_id:
+        # Chat için özel yapı: Kategori CHAT
+        chat_data = [{"category": "CHAT", "level": "INFO", "message": request.prompt}]
+        response = await analyst.analyze_results(chat_data, 100.0)
+        return {"response": response}
+
+    # 2. Bağlamsal Analiz (Tarama sonuçları üzerine)
+    if request.context_scan_id not in ACTIVE_SCANS:
+        raise HTTPException(status_code=404, detail="Referans tarama bulunamadı.")
+    
+    engine = ACTIVE_SCANS[request.context_scan_id].get("engine")
+    if not engine:
+        return {"response": "Tarama verisi henüz oluşmadı."}
+        
+    response = await analyst.analyze_results(engine.results, engine.score)
+    return {"response": response}
