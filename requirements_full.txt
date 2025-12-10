@@ -1,0 +1,31 @@
+GUI ve Görselleştirme
+
+customtkinter==5.2.2
+pillow
+matplotlib
+
+Ağ ve İstekler
+
+requests
+aiohttp
+dnspython
+
+Web ve API
+
+fastapi
+uvicorn
+python-dotenv
+
+Raporlama ve Analiz
+
+jinja2
+pdfkit
+
+Dinamik Tarama (Bot)
+
+selenium
+webdriver-manager
+
+Veri İşleme
+
+pydantic

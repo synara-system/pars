@@ -1,10 +1,10 @@
 # path: Test/ui_ai_analyst.py
 # Synara AI Bilinci (AI Analyst) arayüzünü tanımlar.
-# BU DOSYA 'LIGHT' VERSİYONDUR - CORE BAĞIMLILIĞI YOKTUR.
 
 import customtkinter as ctk
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Any
+import datetime # Timestamp için eklendi
 
 if TYPE_CHECKING:
     from .gui_main import MestegApp # Tip ipucu için
@@ -36,13 +36,37 @@ class AIAnalystConsole(ctk.CTkTextbox):
 def setup_ai_analyst_tab(app):
     """
     GUI'deki AI Analiz sekmesini ayarlar.
+    Hem Cloud (Frame bazlı) hem Desktop (Tabview bazlı) uyumludur.
     """
     
-    # --- KRİTİK DÜZELTME BURADA ---
-    # Eski (Hatalı): tab = app.tab_view.add("🧠 BİLİNÇ ANALİZİ")
-    # Yeni (Doğru): Cloud modunda tab_view yok, doğrudan frame'i kullanıyoruz.
-    tab = app.tab_ai_analyst
+    # --- KRİTİK DÜZELTME: Hibrit Sekme Yönetimi ---
+    # CloudMestegApp (Bulut) -> app.tab_ai_analyst (Frame) kullanır.
+    # MestegApp (Masaüstü) -> app.tab_view (Tabview) kullanır.
     
+    tab = None
+
+    # 1. Cloud Modu Kontrolü (Senin gui_cloud.py yapın)
+    if hasattr(app, 'tab_ai_analyst') and app.tab_ai_analyst is not None:
+        tab = app.tab_ai_analyst
+    
+    # 2. Desktop Modu Kontrolü (Eski gui_main.py yapısı)
+    elif hasattr(app, 'tab_view') and app.tab_view is not None:
+        try:
+            tab = app.tab_view.add("🧠 BİLİNÇ ANALİZİ")
+        except ValueError:
+            # Sekme zaten varsa onu getir
+            tab = app.tab_view.tab("🧠 BİLİNÇ ANALİZİ")
+            
+    # 3. Fallback (Hata Önleyici - Hiçbiri yoksa)
+    if tab is None:
+        if hasattr(app, 'main_content_area'):
+             tab = ctk.CTkFrame(app.main_content_area)
+             tab.pack(fill="both", expand=True)
+        else:
+             # En kötü ihtimalle ana pencereye ekle
+             tab = ctk.CTkFrame(app)
+             tab.pack(fill="both", expand=True)
+
     # Grid yapılandırması
     tab.grid_columnconfigure(0, weight=1)
     tab.grid_rowconfigure(1, weight=1)
@@ -61,8 +85,7 @@ def setup_ai_analyst_tab(app):
     ).grid(row=0, column=0, padx=15, pady=10, sticky="w")
     
     # 3. Yorum Konsolu (AI Çıktısı)
-    # master argümanı sadece pozisyonel olarak geçildi.
-    app.ai_console = AIAnalystConsole(tab) 
+    app.ai_console = AIAnalystConsole(tab)
     app.ai_console.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
 
     # 4. Giriş Çubuğu (Kullanıcı Sohbeti)
@@ -93,7 +116,15 @@ def setup_ai_analyst_tab(app):
     app.entry_ai_chat.bind('<Return>', lambda event: threading.Thread(target=app.run_ai_chat_thread, daemon=True).start())
     
     # Başlangıç mesajını göster
-    app.after(100, lambda: append_to_ai_console(app, "Merhaba Kaptan. Synara'nın Bilinci aktif. Soru veya analiz isteği için hazırım. Puanlama yorumu almak için taramayı başlatın veya buraya bir fikir yazın.", "AI_INFO"))
+    initial_msg = "Merhaba Kaptan. Synara'nın Bilinci aktif. Soru veya analiz isteği için hazırım. Puanlama yorumu almak için taramayı başlatın veya buraya bir fikir yazın."
+    
+    # Güvenli çağrı: app'in append_to_ai_console metodu varsa onu kullan
+    if hasattr(app, 'append_to_ai_console'):
+         # Metod ise self otomatik gider
+         app.after(100, lambda: app.append_to_ai_console(initial_msg, "AI_INFO"))
+    else:
+         # Fonksiyon ise app parametresi verilir
+         app.after(100, lambda: append_to_ai_console(app, initial_msg, "AI_INFO"))
 
 # --- Konsol Çıktı Yardımcı Metotları ---
 
@@ -105,18 +136,30 @@ def append_to_ai_console(app, message: str, speaker: str):
     # Scroll'u tutmak için geçici olarak devreye al
     app.ai_console.configure(state="normal")
     
+    # Zaman damgası (Hata korumalı)
+    timestamp = "00:00:00"
+    
+    # Scanner varsa onun zamanını, yoksa şimdiki zamanı al (Cloud modunda scanner olmayabilir)
+    if hasattr(app, 'scanner') and app.scanner and hasattr(app.scanner, 'start_time') and app.scanner.start_time:
+        try:
+            timestamp = app.scanner.start_time.strftime('%H:%M:%S')
+        except:
+            timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+    else:
+        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+
     # Konuşmacı Rengi
     if speaker == "USER":
         tag = "user_tag"
-        prefix = f"\nKAPTAN:\n"
+        prefix = f"\n[{timestamp}] KAPTAN:\n"
     elif speaker == "AI_INFO":
         tag = "info_tag"
-        prefix = f"\nBİLİNÇ >:\n"
+        prefix = f"\n[{timestamp}] BİLİNÇ >:\n"
     else: # AI RESPONSE
         tag = "ai_tag"
-        prefix = f"\nSYNARA >:\n"
+        prefix = f"\n[{timestamp}] SYNARA >:\n"
         
-    # Renkleri tanımla (tekrar tekrar tanımlamamak için try/except)
+    # Renkleri tanımla
     try:
         app.ai_console.tag_config("user_tag", foreground=app.COLOR_PURPLE)
         app.ai_console.tag_config("ai_tag", foreground=app.COLOR_CYAN)
