@@ -1,111 +1,132 @@
-# path: core/ai_analyst.py
+# path: Test/ui_ai_analyst.py
+# Synara AI Bilinci (AI Analyst) arayüzünü tanımlar.
+# BU DOSYA 'LIGHT' VERSİYONDUR - CORE BAĞIMLILIĞI YOKTUR.
 
-import os
-import json
-import time
-import aiohttp # requests yerine aiohttp kullanıyoruz
-import asyncio
-from typing import List, Dict, Any, Optional, Callable
-from urllib.parse import urlparse
+import customtkinter as ctk
+import threading
+from typing import TYPE_CHECKING
 
-# Sabitler
-MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
-API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent"
+if TYPE_CHECKING:
+    from .gui_main import MestegApp # Tip ipucu için
 
-class AIAnalyst:
-    """
-    Synara'nın Yapay Zekâ Bilinci (Async Cloud Edition).
-    """
-    
-    def __init__(self, logger: Callable):
-        self.log = logger
-        self.api_url = API_URL_TEMPLATE.format(MODEL_NAME)
-        # API anahtarını çevresel değişkenden al (Sunucu tarafında güvenli)
-        self.api_key = os.getenv("GEMINI_API_KEY", "")
+class AIAnalystConsole(ctk.CTkTextbox):
+    """AI Analiz sonuçlarının gösterildiği terminal tarzı çıktı alanı."""
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
         
-    def _construct_prompt(self, results: List[Dict[str, Any]], final_score: float) -> str:
-        """Prompt oluşturucu (Değişmedi)."""
-        critical_findings = []
-        is_chat_mode = False
+        # Varsayılan renk
+        bg_color = "#0b0c15"
+        
+        # Renk hatasını önlemek için güvenli erişim
+        try:
+             app = master.winfo_toplevel()
+             if hasattr(app, 'COLOR_TERMINAL'):
+                 bg_color = app.COLOR_TERMINAL
+        except:
+            pass
 
-        for res in results:
-            if res.get('category') == 'CHAT':
-                 is_chat_mode = True
-                 return res['message'] # Chat modunda direkt mesajı dön
-            
-            if res.get('cvss_score', 0.0) > 0.0:
-                critical_findings.append({
-                    "Kategori": res['category'],
-                    "Seviye": res['level'],
-                    "SRP_Dususu": res.get('cvss_score', 0.0),
-                    "Mesaj": res['message']
-                })
-        
-        prompt = "Sen, bir siber güvenlik analisti olan Synara AI Bilinci'sin. Görevin, verilen bir web taraması sonucunu analiz etmektir. "
-        prompt += f"Tarama Skoru: %{final_score:.1f}/100\n"
-        prompt += "Tespit Edilen Kritik Bulgular:\n"
-        prompt += "--- START FINDINGS ---\n"
-        
-        for item in critical_findings:
-            prompt += f"Kategori: {item['Kategori']}, Seviye: {item['Seviye']}, Düşüş: {item['SRP_Dususu']:.1f}, Mesaj: {item['Mesaj']}\n"
-            
-        prompt += "--- END FINDINGS ---\n\n"
-        prompt += "Lütfen şunları yap:\n"
-        prompt += "1. Bu sonuçlara göre bir 'Hacker Aksiyon Planı' oluştur (Saldırgan ne dener?).\n"
-        prompt += "2. Kuruluş için en acil 3 savunma önerisini yaz.\n"
-        prompt += "3. Cevabın kurumsal, net ve Türkçe olsun."
-        
-        return prompt
-
-    async def analyze_results(self, results: List[Dict[str, Any]], final_score: float, api_key: str = None) -> str:
-        """
-        Synara sonuçlarını LLM'e gönderir (Asenkron).
-        """
-        # Anahtarı parametreden veya env'den al
-        use_key = api_key if api_key else self.api_key
-        
-        if not use_key:
-             return "AI Bilinci devre dışı: Gemini API Anahtarı sunucuda tanımlı değil."
-
-        prompt = self._construct_prompt(results, final_score)
-        
-        system_instruction = (
-            "Sen, MESTEG Teknoloji'nin yapay zeka Bilinci olan Synara'sın. "
-            "Siber Güvenlik Uzmanısın. Cevapların teknik ve çözüm odaklıdır."
+        self.configure(
+            state="disabled",
+            wrap="word",
+            text_color="white",
+            fg_color=bg_color,
+            font=("Consolas", 12)
         )
 
-        headers = { 'Content-Type': 'application/json' }
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "systemInstruction": {"parts": [{"text": system_instruction}]},
-            "generationConfig": { "temperature": 0.5 }
-        }
+def setup_ai_analyst_tab(app):
+    """
+    GUI'deki AI Analiz sekmesini ayarlar.
+    """
+    
+    # --- KRİTİK DÜZELTME BURADA ---
+    # Eski (Hatalı): tab = app.tab_view.add("🧠 BİLİNÇ ANALİZİ")
+    # Yeni (Doğru): Cloud modunda tab_view yok, doğrudan frame'i kullanıyoruz.
+    tab = app.tab_ai_analyst
+    
+    # Grid yapılandırması
+    tab.grid_columnconfigure(0, weight=1)
+    tab.grid_rowconfigure(1, weight=1)
+    
+    # 2. Üst Kontrol Çerçevesi (Chat Arayüzü/Başlık)
+    control_frame = ctk.CTkFrame(tab, fg_color=app.COLOR_SIDEBAR, corner_radius=8)
+    control_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
+    control_frame.grid_columnconfigure(0, weight=1)
+    
+    # Başlık
+    ctk.CTkLabel(
+        control_frame, 
+        text="SYNARA AKIL HOCASI (Gemini Destekli)", 
+        font=ctk.CTkFont(size=14, weight="bold"),
+        text_color=app.COLOR_CYAN
+    ).grid(row=0, column=0, padx=15, pady=10, sticky="w")
+    
+    # 3. Yorum Konsolu (AI Çıktısı)
+    # master argümanı sadece pozisyonel olarak geçildi.
+    app.ai_console = AIAnalystConsole(tab) 
+    app.ai_console.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
 
-        self.log("[AI ANALİST] Analiz için Gemini API'ye istek gönderiliyor...", "INFO")
+    # 4. Giriş Çubuğu (Kullanıcı Sohbeti)
+    input_frame = ctk.CTkFrame(tab, fg_color="transparent")
+    input_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
+    input_frame.grid_columnconfigure(0, weight=1)
+    
+    app.entry_ai_chat = ctk.CTkEntry(
+        input_frame, 
+        placeholder_text="Sistemin bilinç seviyesiyle sohbet et...",
+        fg_color=app.COLOR_TERMINAL_FRAME,
+        border_color=app.COLOR_TERMINAL_FRAME,
+        text_color="white",
+        font=("Consolas", 12)
+    )
+    app.entry_ai_chat.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+    
+    btn_send = ctk.CTkButton(
+        input_frame, 
+        text="GÖNDER", 
+        command=lambda: threading.Thread(target=app.run_ai_chat_thread, daemon=True).start(),
+        fg_color=app.COLOR_ACCENT,
+        hover_color="#c71f45",
+        width=100
+    )
+    btn_send.grid(row=0, column=1, sticky="e")
+    
+    app.entry_ai_chat.bind('<Return>', lambda event: threading.Thread(target=app.run_ai_chat_thread, daemon=True).start())
+    
+    # Başlangıç mesajını göster
+    app.after(100, lambda: append_to_ai_console(app, "Merhaba Kaptan. Synara'nın Bilinci aktif. Soru veya analiz isteği için hazırım. Puanlama yorumu almak için taramayı başlatın veya buraya bir fikir yazın.", "AI_INFO"))
+
+# --- Konsol Çıktı Yardımcı Metotları ---
+
+def append_to_ai_console(app, message: str, speaker: str):
+    """AI konsoluna renkli metin ekler."""
+    if not hasattr(app, 'ai_console') or app.ai_console is None:
+        return
+
+    # Scroll'u tutmak için geçici olarak devreye al
+    app.ai_console.configure(state="normal")
+    
+    # Konuşmacı Rengi
+    if speaker == "USER":
+        tag = "user_tag"
+        prefix = f"\nKAPTAN:\n"
+    elif speaker == "AI_INFO":
+        tag = "info_tag"
+        prefix = f"\nBİLİNÇ >:\n"
+    else: # AI RESPONSE
+        tag = "ai_tag"
+        prefix = f"\nSYNARA >:\n"
         
-        # aiohttp ile Asenkron İstek
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.post(
-                    f"{self.api_url}?key={use_key}", 
-                    headers=headers, 
-                    json=payload, 
-                    timeout=30
-                ) as response:
-                    
-                    if response.status != 200:
-                        error_text = await response.text()
-                        self.log(f"[AI ANALİST] API Hatası: {response.status}", "CRITICAL")
-                        return f"Hata: {error_text[:100]}"
-                    
-                    result = await response.json()
-                    
-                    if 'candidates' not in result or not result['candidates']:
-                         return "AI yanıt üretemedi (Filtre veya boş yanıt)."
-                         
-                    text = result['candidates'][0]['content']['parts'][0]['text']
-                    return text
-                    
-            except Exception as e:
-                self.log(f"[AI ANALİST] Bağlantı Hatası: {str(e)}", "CRITICAL")
-                return "AI servisine erişilemedi."
+    # Renkleri tanımla (tekrar tekrar tanımlamamak için try/except)
+    try:
+        app.ai_console.tag_config("user_tag", foreground=app.COLOR_PURPLE)
+        app.ai_console.tag_config("ai_tag", foreground=app.COLOR_CYAN)
+        app.ai_console.tag_config("info_tag", foreground=app.COLOR_TEXT_SECONDARY)
+    except:
+        pass
+        
+    app.ai_console.insert("end", prefix, tag)
+    app.ai_console.insert("end", message + "\n", tag)
+    
+    # Aşağı kaydır ve devre dışı bırak
+    app.ai_console.see("end")
+    app.ai_console.configure(state="disabled")
