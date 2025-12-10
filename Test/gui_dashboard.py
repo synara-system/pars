@@ -8,9 +8,6 @@ import datetime
 import uuid
 import math
 
-# Engine'den tarama profillerini çekmek için import
-from core.engine import SCAN_PROFILES 
-
 # FAZ 16: Grafik çizimi için matplotlib (Artık kullanılmayacak ama import kalsın)
 try:
     import matplotlib.pyplot as plt
@@ -35,6 +32,15 @@ COLOR_TERMINAL_FRAME = "#2d2e42"
 COLOR_TEXT_PRIMARY = "#ffffff"
 COLOR_TEXT_SECONDARY = "#a0a0b5"
 COLOR_CARD_IDLE = "#1e202e"
+
+# --- TARAMA PROFİLLERİ (Engine bağımlılığını kaldırmak için buraya taşındı) ---
+SCAN_PROFILES = {
+    "FULL_SCAN": "Tüm modüller (Hafiften Kapsamlı Fuzzing'e kadar). En yavaş ve en derin tarama.",
+    "BUG_BOUNTY_CORE": "BBH (Bug Bounty Hunter - SADECE KAZANÇ): Yüksek Ödüllü Kritik Zafiyetler ve Gelişmiş Keşif için optimize edilmiştir.",
+    "LIGHT": "Sadece Temel Analiz ve Zeka (Headers, Files, Heuristic). Çok hızlı.",
+    "FUZZING_ONLY": "Sadece Fuzzing Modülleri (XSS, SQLi, LFI, RCE).",
+    "INTERNAL_MISSION": "Sadece Synara'nın çekirdeğini (Codebase, Manifest, Sırlar) analiz eder."
+}
 
 class ModuleStatusCard(ctk.CTkFrame):
     """
@@ -313,14 +319,10 @@ class RichConsole(ctk.CTkFrame):
                 exploit_id = tag.split('_')[-1]
                 exploit_data = self.exploit_data_map.get(exploit_id)
                 app = self.master.winfo_toplevel()
-                if exploit_data and hasattr(app, 'scanner') and app.scanner:
-                    exploit_type = "UNKNOWN"
-                    if "SQLi" in exploit_data: exploit_type = "SQLi"
-                    elif "LFI" in exploit_data: exploit_type = "LFI"
-                    elif "IDOR" in exploit_data: exploit_type = "IDOR"
-                    elif "XSS" in exploit_data: exploit_type = "XSS"
-                    app.scanner.run_manual_exploit(exploit_type, exploit_data)
-                    if hasattr(app, 'log_to_gui'): app.log_to_gui(f"[CMD] Manuel Exploit '{exploit_type}' başlatıldı...", "CMD")
+                # GUI Cloud modunda çalışırken yerel exploit çalıştırma desteklenmez
+                # Ancak ileride API üzerinden exploit isteği gönderilebilir
+                if hasattr(app, 'run_manual_exploit_dialog'): 
+                     messagebox.showinfo("Info", "Cloud Mode: Manuel exploit için lütfen panel butonunu kullanın.")
                 return
 
     def write_log(self, message, level):
@@ -364,9 +366,9 @@ class RichConsole(ctk.CTkFrame):
             if level in ["CRITICAL", "HIGH", "WARNING", "SUCCESS"] and hasattr(app, 'add_threat_feed_item'):
                  app.add_threat_feed_item(raw_category, level, log_content)
             
-            # --- HUD GÜNCELLEME ---
-            if hasattr(app, 'scanner') and hasattr(app, 'hud_panel'):
-                app.hud_panel.update_stats(app.scanner.score, app.risk_counts)
+            # --- HUD GÜNCELLEME (Cloud Mode'da bu çağrı API Client tarafından yapılacak) ---
+            # if hasattr(app, 'scanner') and hasattr(app, 'hud_panel'):
+            #     app.hud_panel.update_stats(app.scanner.score, app.risk_counts)
 
             if "CRITICAL" in level: cat_tag = "CRITICAL"
             elif "WARNING" in level: cat_tag = "WARNING"
@@ -374,12 +376,11 @@ class RichConsole(ctk.CTkFrame):
             elif "CMD" in level: cat_tag = "CMD"
             else: cat_tag = "CMD" 
 
+        # Scan Completed kontrolü cloud modunda farklı işlenir, burada sadece görsel
         if "Scan Completed" in message or "Tarama Bitti" in message:
              if hasattr(app, 'scanner_status_cards'):
                 for mod_key, card_data in app.scanner_status_cards.items():
                     card_data['frame'].set_status("finished")
-             if hasattr(app, 'scanner') and hasattr(app, 'hud_panel'):
-                app.hud_panel.update_stats(app.scanner.score, app.risk_counts)
 
         timestamp = datetime.datetime.now().strftime('%H:%M:%S') 
         self.text_area.insert("end", f"{timestamp} ", "INFO")
@@ -449,7 +450,13 @@ def initialize_cards(app):
         'CLOUD_EXPLOIT': 'CLOUDSTORM'
     }
     
-    full_scan_modules = SCAN_PROFILES["FULL_SCAN"]["modules"]
+    # Cloud modunda FULL_SCAN modülleri varsayalım
+    full_scan_modules = [
+        'WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'HEADERS', 'FILES', 
+        'PORT_SCAN', 'HEURISTIC', 'AUTH_BYPASS', 'LFI', 'XSS', 'SQLI', 'IDOR', 'RCE_SSRF', 
+        'JSON_API', 'CLOUD_EXPLOIT', 'REACT_EXPLOIT', 'NUCLEI', 'INTERNAL_SCAN', 
+        'JS_ENDPOINT', 'GRAPHQL', 'CLIENT_LOGIC', 'HTTP_SMUGGLING', 'BUSINESS_LOGIC'
+    ]
     
     row_idx = 0
     for mod_key in full_scan_modules:
@@ -481,7 +488,7 @@ def setup_dashboard_tab(app):
     # SYNARA SYSTEM -> PARS DASHBOARD
     ctk.CTkLabel(header, text=" PARS", font=ctk.CTkFont(family="Orbitron", size=32, weight="bold"), text_color=COLOR_ACCENT).pack(side="left")
     # ULTIMATE SECURITY CORE -> SECURITY OPERATIONS CENTER
-    ctk.CTkLabel(header, text="Pentest Autonomous Recon System", font=ctk.CTkFont(family="Consolas", size=14), text_color=COLOR_CYAN).pack(side="left", padx=15, pady=12)
+    ctk.CTkLabel(header, text="Pentest Autonomous Recon System", font=ctk.CTkFont(family="Consolas", size=14), text_color=COLOR_CYAN).pack(side="left", padx=15, pady=12)
 
     # INPUT BAR
     input_bar = ctk.CTkFrame(tab, fg_color=COLOR_SIDEBAR, corner_radius=8, border_width=1, border_color=COLOR_TERMINAL_FRAME)
@@ -494,13 +501,12 @@ def setup_dashboard_tab(app):
     app.entry_url.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
     app.entry_url.insert(0, "http://google-gruyere.appspot.com") 
 
-    from core.engine import SCAN_PROFILES, SynaraScannerEngine
     profile_names = list(SCAN_PROFILES.keys())
     app.profile_select = ctk.CTkOptionMenu(input_bar, values=profile_names, width=140, height=40, fg_color=COLOR_BG, button_color=COLOR_TERMINAL_FRAME, button_hover_color=COLOR_ACCENT, text_color="white", dropdown_fg_color=COLOR_SIDEBAR, font=("Roboto", 12))
-    app.profile_select.set(SynaraScannerEngine.DEFAULT_PROFILE) 
+    app.profile_select.set("BUG_BOUNTY_CORE") 
     app.profile_select.grid(row=0, column=2, padx=10, pady=15)
 
-    app.btn_scan = ctk.CTkButton(input_bar, text="ENGAGE SYSTEM", height=40, width=150, font=ctk.CTkFont(weight="bold", size=14), fg_color=COLOR_ACCENT, hover_color="#c71f45", corner_radius=6, command=app.start_scan_thread)
+    app.btn_scan = ctk.CTkButton(input_bar, text="ENGAGE SYSTEM", height=40, width=150, font=ctk.CTkFont(weight="bold", size=14), fg_color=COLOR_ACCENT, hover_color="#c71f45", corner_radius=6)
     app.btn_scan.grid(row=0, column=3, padx=20, pady=15)
     
     # LEFT PANEL (Modules)
@@ -553,5 +559,8 @@ def setup_dashboard_tab(app):
     app.threat_feed_scroll = ctk.CTkScrollableFrame(right_panel, fg_color="#0f111a", corner_radius=6, width=240, scrollbar_button_color=COLOR_TERMINAL_FRAME, scrollbar_button_hover_color=COLOR_ACCENT)
     app.threat_feed_scroll.grid(row=2, column=0, sticky="nsew")
 
-    app.log_welcome_message()
+    # Cloud modunda bu metodu çağırmaya gerek yok, log_welcome_message gui_cloud'da yok
+    if hasattr(app, 'log_welcome_message'):
+         app.log_welcome_message()
+         
     initialize_cards(app)

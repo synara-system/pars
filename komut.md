@@ -7,7 +7,12 @@ pip install pillow
 
 
 
+Docker Kurulum
+git add .
+git commit -m "Pars API sunucu yapisi ve Dockerfile eklendi"
+git push origin main
 
+py -m pip install requests customtkinter pillow
 
 
 
