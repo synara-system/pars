@@ -2,40 +2,69 @@
 
 import aiohttp
 import asyncio
-import re
 import json
-import random
-# KRİTİK DÜZELTME: Tüm gerekli tipler ve urllib.parse fonksiyonları tek yerden import edildi.
-from typing import Callable, List, Dict, Any, Optional, Union, Set, Tuple # KRİTİK DÜZELTME: Tuple eklendi
+from time import time
+from typing import Callable, List, Dict, Any, Optional, Union, Set, Tuple 
 from urllib.parse import urlparse, parse_qs, urlencode, urljoin, urlunparse 
+import random 
 
 from core.scanners.base_scanner import BaseScanner
+from core.data_simulator import DataSimulator 
+from core.payload_generator import PayloadGenerator # FAZ 34: Payload Generator import edildi
 
 class BusinessLogicFuzzer(BaseScanner):
     """
-    [AR-GE v1.0 - STATEFUL LOGIC BREAKER]
-    Uygulamanın iş mantığı (business logic) hatalarını tarar.
-    Özellikle OTP, ödeme akışları ve limit kontrollerini hedefler.
+    [FAZ 33/34 - BUSINESS LOGIC FUZZER]
+    Uygulamanın iş mantığı akışındaki (örnek: ödeme, sepet, kupon kullanımı)
+    kritik zafiyetleri (Yarış Koşulu, Fiyat Manipülasyonu, Yetki Atlaması) bulmaya odaklanır.
     """
 
-    # Mantık hatası içeren işlemleri tetikleyen API yolları (heuristic)
-    CRITICAL_PATHS = [
-        "/api/reset_password",
-        "/api/verify_otp",
-        "/api/checkout",
-        "/api/place_order",
-        "/api/update_limit",
-        "/account/settings",
-    ]
+    PER_MODULE_LIMIT = 5
     
-    # Kapsam dışı tutulacak genel yollar
-    IGNORE_PATHS = ["/login", "/auth", "/logout"]
+    # --- KRİTİK İŞ MANTIĞI VEKTÖRLERİ (Simülasyon) ---
+    LOGIC_VECTORS = {
+        "PRICE_MANIPULATION": {
+            "ENDPOINT": "/api/v1/cart/update",
+            "METHOD": "POST",
+            "BODY": {"item_id": 1234, "quantity": 1, "price": -1}, # Negatif fiyat enjeksiyonu
+            "ANOMALY_CHECK": 200, 
+            "RISK": "HIGH",
+            "DESC": "Negatif fiyat/miktar enjeksiyonu ile bakiye manipülasyonu denemesi."
+        },
+        "RACE_CONDITION_SIMPLE": {
+            "ENDPOINT": "/api/v1/coupons/apply",
+            "METHOD": "POST",
+            "BODY": {"coupon_code": "DISC_SINGLE_USE_100", "user_id": "CURRENT_USER"},
+            "ANOMALY_CHECK": 200, 
+            "RISK": "CRITICAL",
+            "DESC": "Tek kullanımlık kuponun birden fazla istek ile aynı anda kullanımı (Race Condition) denemesi."
+        },
+        "IDOR_IN_LOGIC": {
+            "ENDPOINT": "/api/v1/orders/view",
+            "METHOD": "GET",
+            "PARAMS": {"order_id": "999999", "user_id": "OTHER_USER_ID"}, # Başka bir kullanıcı ID'si
+            "ANOMALY_CHECK": 200, 
+            "RISK": "HIGH",
+            "DESC": "Yetkilendirme olmadan başka bir kullanıcıya ait ID'ye erişim denemesi (IDOR)."
+        }
+    }
+    # ------------------------------------------------
 
-    # Ödeme/Limit Manipülasyonu için test edilecek parametreler
-    MONEY_PARAMS = ["price", "amount", "total", "limit", "cost"]
-    
-    # OTP/Sıra tabanlı parametreler
-    SEQUENCE_PARAMS = ["otp", "code", "token", "verification_code", "step"]
+    def __init__(self, logger, results_callback, request_callback: Callable[[], None]):
+        super().__init__(logger, results_callback, request_callback) 
+        self.module_semaphore = asyncio.Semaphore(self.PER_MODULE_LIMIT)
+        self.host_url: str = ""
+        self.baseline_responses: Dict[str, Dict[str, Any]] = {} 
+        self.CRITICAL_PATHS = [
+            "/api/reset_password", "/api/verify_otp", "/api/checkout",
+            "/api/place_order", "/api/update_limit", "/account/settings",
+        ]
+        self.SEQUENCE_PARAMS = ["otp", "code", "token", "verification_code", "step"]
+        self.MONEY_PARAMS = ["price", "amount", "total", "limit", "cost"]
+        
+        # FAZ 34: Engine'den enjekte edilen Payload Generator'ı tut
+        self.payload_generator: Optional[PayloadGenerator] = None 
+
 
     @property
     def name(self):
@@ -45,11 +74,6 @@ class BusinessLogicFuzzer(BaseScanner):
     def category(self):
         return "BUSINESS_LOGIC" 
 
-    def __init__(self, logger, results_callback, request_callback: Callable[[], None]):
-        super().__init__(logger, results_callback, request_callback)
-        # Yanıt boyutunu baseline olarak tut (Race condition simülasyonu için)
-        self.baseline_responses: Dict[str, Dict[str, Any]] = {} 
-
     async def scan(
         self,
         url: str,
@@ -58,20 +82,15 @@ class BusinessLogicFuzzer(BaseScanner):
     ):
         self.log(f"[{self.category}] Stateful İş Mantığı Fuzzing'i başlatılıyor...", "INFO")
         
-        # Hata olan satır (Tip tanımı artık doğru)
         discovered_paths: Set[str] = getattr(self, "discovered_params", set())
         
-        # Kritik test edilecek URL'leri topla
         target_urls = set()
         
-        # 1. Önceden keşfedilen yolları filtrele
         for path in discovered_paths:
             if any(crit_path in path.lower() for crit_path in self.CRITICAL_PATHS):
                 target_urls.add(path)
                 
-        # 2. Ana URL'yi temel path'lerle birleştir (eğer query yoksa)
         for path in self.CRITICAL_PATHS:
-            # Hata olan satır (urljoin artık doğru import edildi)
             target_urls.add(urljoin(url, path))
 
         if not target_urls:
@@ -132,27 +151,30 @@ class BusinessLogicFuzzer(BaseScanner):
                     
                     self.log(f"[{self.category}] SEQUENCE TESTİ başlatıldı: Param '{param}'", "INFO")
                     
-                    # 1. Test: Basit Brute Force Simülasyonu (OTP Replay)
-                    # Orijinal değeri tekrar dene (eğer ilk basamak değilse)
                     original_value = base_query.get(param, ["1234"])[0]
                     
-                    for i in range(5): # 5 deneme simüle et
+                    try:
+                        original_int = int(original_value)
+                    except ValueError:
+                        self.log(f"[{self.category}] Sequence/OTP Parametresi '{param}' sayısal değil, atlanıyor.", "INFO")
+                        continue
+
+                    # 1. Test: Basit Brute Force Simülasyonu (OTP Replay)
+                    for i in range(5): 
                         try:
-                            # Payload: Rastgele 4-6 haneli sayı veya artırma
-                            test_value = str(int(original_value) + i + random.randint(10, 50)) 
+                            # KRİTİK DÜZELTME: Sadece sayısal değerlerle işlem yapılıyor.
+                            test_value = str(original_int + i + random.randint(10, 50)) 
                             
                             test_query = dict(base_query)
                             test_query[param] = [test_value]
                             
                             new_parts = list(parsed)
                             new_parts[4] = urlencode(test_query, doseq=True)
-                            # Hata olan satır (urlunparse artık doğru import edildi)
                             test_url = urlunparse(new_parts)
                             
                             self.request_callback()
                             async with session.get(test_url, timeout=5) as res:
                                 text = await res.text()
-                                # Başarı sinyalleri: Hata mesajı yok, 200/302 OK, ve sonraki adıma geçiş kelimeleri
                                 is_success = res.status in [200, 302] and ("success" in text.lower() or "dashboard" in text.lower())
                                 
                                 if is_success:
@@ -168,12 +190,34 @@ class BusinessLogicFuzzer(BaseScanner):
 
     async def _test_money_limit_manipulation(self, url: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore):
         """
-        Para birimi/Limit parametrelerini (price, amount) manipüle eder.
+        Para birimi/Limit parametrelerini (price, amount) manipüle eder ve AI'dan destek alır.
         """
         
         async with semaphore:
             parsed = urlparse(url)
             base_query = parse_qs(parsed.query)
+            
+            # FAZ 34 KRİTİK: AI'dan Business Logic için özel payload'lar iste
+            ai_payloads = []
+            if self.payload_generator and self.payload_generator.neural_engine.is_active:
+                context = {
+                    "url": url,
+                    "params": list(base_query.keys()),
+                    "target": "Price Manipulation / Limit Bypass"
+                }
+                # AI'dan Business Logic için AI-Driven payload'lar iste
+                ai_payloads_list = await self.payload_generator.neural_engine.generate_ai_payloads(context, "LOGIC_FUZZ")
+                
+                # AI'dan gelen payload'ları sadece MONEY_PARAMS üzerinde test et
+                for ai_value in ai_payloads_list:
+                    # AI'dan gelen değeri float'a çevirip test etmek için ekle
+                    try:
+                        ai_payloads.append(float(ai_value))
+                    except ValueError:
+                        # Eğer AI string bazlı (kupon kodu gibi) bir şey döndürdüyse, onu da işlemek gerekebilir.
+                        # Şimdilik sadece sayısal manipülasyonlara odaklanalım.
+                        pass
+            
             
             for param in base_query.keys():
                 if param.lower() in self.MONEY_PARAMS:
@@ -182,6 +226,7 @@ class BusinessLogicFuzzer(BaseScanner):
                     try:
                         original_value = float(original_value_str)
                     except ValueError:
+                        self.log(f"[{self.category}] Money Parametresi '{param}' sayısal değil, atlanıyor.", "INFO")
                         continue
                         
                     # 1. Test: Negatif Değer Enjeksiyonu (iade/limit bypass)
@@ -189,6 +234,11 @@ class BusinessLogicFuzzer(BaseScanner):
                     
                     # 2. Test: Sıfır Değer Enjeksiyonu (ücretsiz işlem)
                     await self._send_logic_payload(url, param, 0.0, original_value_str, "Sıfır değer", session)
+
+                    # 3. Test: AI Tarafından Üretilen Değerler
+                    for ai_test_value in ai_payloads:
+                        # Eğer AI payload'ı sayısal ise test et
+                        await self._send_logic_payload(url, param, ai_test_value, original_value_str, f"AI-Driven ({ai_test_value})", session)
 
 
     async def _send_logic_payload(self, url: str, param: str, test_value: Union[float, int], original_value: str, test_type: str, session: aiohttp.ClientSession):
@@ -203,7 +253,6 @@ class BusinessLogicFuzzer(BaseScanner):
         
         new_parts = list(parsed)
         new_parts[4] = urlencode(test_query, doseq=True)
-        # Hata olan satır (urlunparse artık doğru import edildi)
         test_url = urlunparse(new_parts)
 
         # Baseline: Orijinal değerin yanıt uzunluğunu/status'ünü al
@@ -213,40 +262,32 @@ class BusinessLogicFuzzer(BaseScanner):
             self.request_callback()
             async with session.get(test_url, timeout=10) as res:
                 
-                # Başarılı Smuggling/Logic Error sinyali:
-                # 1. Status: 200 (Hata yok)
-                # 2. Boyut: Baseline'dan anlamlı derecede farklı (Küçülme)
-                # 3. İçerik: Hata mesajı içermiyor (veya 'Success', 'Payment Approved' gibi kelimeler içeriyor)
-                
                 text = await res.text()
                 
                 is_successful_status = res.status in [200, 201, 202]
                 is_not_error_message = not ("error" in text.lower() or "fail" in text.lower() or "invalid" in text.lower())
 
                 if is_successful_status and is_not_error_message:
-                    # Başarıya ulaşan Negatif/Sıfır değer, yüksek risk taşır.
                     
-                    # Heuristic kontrol: Yanıt uzunluğu, orijinal yanıta çok benziyorsa
                     len_curr = len(text)
                     length_diff_ratio = abs(len_curr - len_orig) / max(len_orig, 1)
 
-                    if length_diff_ratio < 0.2: # %20'den az fark varsa (yani sayfa yapısı aynı kalmış)
-                         # Fiyatı 0 yapan istek başarılı olduysa kritik
-                         if test_value <= 0:
-                              self.add_result(
-                                  self.category, "CRITICAL", 
-                                  f"KRİTİK: Fiyat Manipülasyonu (Price/Limit Bypass)! Param '{param}' için '{test_value}' denemesi başarılı oldu (Yanıt Status {res.status}).",
-                                  self._calculate_score_deduction("CRITICAL")
-                              )
-                              return
+                    if test_value <= 0 and is_successful_status: # Negatif/Sıfır değer başarılı oldu
+                         self.add_result(
+                             self.category, "CRITICAL", 
+                             f"KRİTİK: Fiyat Manipülasyonu (Price/Limit Bypass)! Param '{param}' için '{test_value}' denemesi başarılı oldu (Yanıt Status {res.status}, Vektör: {test_type}).",
+                             self._calculate_score_deduction("CRITICAL")
+                         )
+                         return
                     
                     # Eğer çok büyük bir fark varsa (yeni sayfa/içerik) ve hata yoksa şüpheli
                     elif length_diff_ratio > 0.5:
                          self.add_result(
-                            self.category, "WARNING", 
-                            f"RİSK: İş Mantığı Sapması ({test_type})! Param '{param}' manipülasyonu sonucu yanıt içeriği ciddi değişti (Status {res.status}).",
-                            self._calculate_score_deduction("WARNING")
-                         )
-                         
+                             self.category, "WARNING", 
+                             f"RİSK: İş Mantığı Sapması ({test_type})! Param '{param}' manipülasyonu sonucu yanıt içeriği ciddi değişti (Status {res.status}).",
+                             self._calculate_score_deduction("WARNING")
+                           )
+                         return
+                            
         except Exception:
             return

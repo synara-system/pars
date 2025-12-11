@@ -6,12 +6,17 @@ import webbrowser
 
 def install_dependencies():
     """Eksik kütüphaneleri otomatik yükler"""
-    required_packages = ["fastapi", "uvicorn", "python-dotenv"]
+    # GÜNCELLENDİ: selenium, webdriver-manager, jinja2 ve pdfkit eklendi
+    required_packages = ["fastapi", "uvicorn", "python-dotenv", "selenium", "webdriver-manager", "jinja2", "pdfkit", "matplotlib","wkhtmltopdf",]
     print("[*] Sunucu gereksinimleri kontrol ediliyor...")
     
     for package in required_packages:
         try:
-            __import__(package.replace("-", "_")) # python-dotenv -> dotenv kontrolü
+            # python-dotenv -> dotenv, webdriver-manager -> webdriver_manager dönüşümü
+            import_name = package.replace("-", "_")
+            if package == "python-dotenv": import_name = "dotenv"
+            
+            __import__(import_name)
         except ImportError:
             print(f"[!] {package} eksik, yükleniyor...")
             try:

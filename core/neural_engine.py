@@ -5,8 +5,11 @@ import asyncio
 import json
 import os
 import time
-import random # KRİTİK DÜZELTME: random.uniform kullanıldığı için eklendi
-from typing import Dict, Any, Optional
+import random
+from typing import Dict, Any, Optional, List # List eklendi
+
+# Local Imports
+from .data_simulator import DataSimulator # DataSimulator import edildi
 
 # API İstekleri için Ustel Geri Çekilme (Exponential Backoff) Sabitleri
 MAX_RETRIES = 3
@@ -16,7 +19,7 @@ class NeuralEngine:
     """
     PARS NEURAL ENGINE (v23.0 - Mini Brain)
     
-    Google Gemini 1.5 Flash API kullanarak tespit edilen zafiyetler için
+    Google Gemini 2.5 Flash API kullanarak tespit edilen zafiyetler için
     ikinci bir göz (AI Verification) ve sömürü önerisi (Exploit Suggestion) sağlar.
     """
     
@@ -25,13 +28,62 @@ class NeuralEngine:
         # API Anahtarını çevresel değişkenden veya parametreden al
         # Not: Güvenilirliğini artırmak için API URL'de model belirtiliyor.
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        
+        # KRİTİK DÜZELTME: API 404 hatasını çözmek için model adı güncellendi.
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        
         self.is_active = bool(self.api_key)
         
         if self.is_active:
-            self.log("[NEURAL] Yapay Zeka Motoru (Gemini 1.5 Flash) AKTİF.", "SUCCESS")
+            self.log("[NEURAL] Yapay Zeka Motoru (Gemini 2.5 Flash) AKTİF.", "SUCCESS")
         else:
             self.log("[NEURAL] API Anahtarı bulunamadı. Yapay Zeka devre dışı.", "WARNING")
+
+    async def generate_ai_payloads(self, context_data: Dict[str, Any], vulnerability_type: str, count: int = 5) -> List[str]:
+        """
+        FAZ 29: Payload Generator'a AI tarafından üretilmiş payload'ları sağlar.
+        API aktif değilse, DataSimulator'dan mock verileri alır (List[str] döndürür).
+        """
+        # Hata 1'i çözen kritik eksik metot eklendi.
+        if not self.is_active:
+            # AI pasifken DataSimulator'dan simüle edilmiş listeyi döndür
+            return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
+
+        # 1. Prompt Hazırlığı (Gerçek AI isteği)
+        context_str = json.dumps(context_data)
+        prompt = f"""
+        Sen kıdemli bir siber güvenlik fuzzer'ısın. Hedef zafiyet türü: {vulnerability_type}. 
+        Mevcut tarama bağlamı/parametreler: {context_str}. 
+        
+        Bu bağlama özel olarak hazırlanmış, WAF'ı (Cloudflare, ModSecurity) atlatma potansiyeli olan {count} adet benzersiz payload üret. 
+        Yanıtı sadece payload'ların bulunduğu bir JSON dizisi (List of Strings) olarak döndür. 
+        Örnek format: ["payload1", "payload2", "payload3"]
+        """
+        
+        # 2. AI Sorgusunu Çalıştır (JSON formatını zorla)
+        ai_response_text = await self._query_gemini(prompt, is_json=True)
+        
+        # KRİTİK KONTROL: Eğer yanıt bir hata mesajı içeriyorsa (örn: "API Hatası: 403"), simülasyona dön.
+        if ai_response_text.startswith("API Hatası:") or ai_response_text.startswith("Beklenmedik Hata:") or ai_response_text.startswith("Bağlantı Hatası:"):
+            self.log(f"[NEURAL] KRİTİK YEDEK: API hatası ({ai_response_text[:15]}) nedeniyle simülasyon kullanılıyor.", "WARNING")
+            return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
+
+        # 3. Yanıtı Ayrıştır (List[str] bekleniyor)
+        try:
+            # ai_response_text bir JSON stringi olmalıdır (örn: "[\"p1\", \"p2\"]")
+            payload_list = json.loads(ai_response_text)
+            if isinstance(payload_list, list):
+                # Başarılı JSON ve List ayrıştırması
+                return payload_list[:count]
+            else:
+                # Başarısız JSON formatı (Liste değilse)
+                self.log(f"[NEURAL] HATA: AI yanıtı Liste formatında değil: {ai_response_text[:50]}...", "WARNING")
+                return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
+        except json.JSONDecodeError:
+            # JSON ayrıştırma hatası (Raw string gelirse)
+            self.log(f"[NEURAL] HATA: AI yanıtı JSON ayrıştırılamadı. Raw text: {ai_response_text[:50]}...", "WARNING")
+            return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
+
 
     async def analyze_vulnerability(self, vuln_data: Dict[str, Any]) -> str:
         """
@@ -74,7 +126,7 @@ class NeuralEngine:
         
         return await self._query_gemini(prompt)
 
-    async def _query_gemini(self, prompt: str) -> str:
+    async def _query_gemini(self, prompt: str, is_json: bool = False) -> str: # is_json parametresi eklendi
         """
         [RESILIENCE CORE] Google Gemini API'sine üstel geri çekilme ile istek atar.
         """
@@ -88,7 +140,20 @@ class NeuralEngine:
                 "maxOutputTokens": 100
             }
         }
-        
+
+        # YENİ: JSON Format Zorlaması
+        if is_json:
+            payload['generationConfig'] = {
+                "responseMimeType": "application/json",
+                "responseSchema": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"}
+                },
+                "temperature": 0.2,
+                "maxOutputTokens": 512 # Payload listeleri daha uzun olabilir
+            }
+
+
         url = f"{self.base_url}?key={self.api_key}"
         
         for attempt in range(MAX_RETRIES):
@@ -102,10 +167,17 @@ class NeuralEngine:
                             data = await resp.json()
                             try:
                                 # Gemini Response Parsing
-                                text = data['candidates'][0]['content']['parts'][0]['text']
+                                if is_json:
+                                    # JSON zorlaması yapılırken, content'in ilk part'ı JSON stringi olarak döner.
+                                    text = data['candidates'][0]['content']['parts'][0]['text']
+                                else:
+                                    # Standart metin yanıtı
+                                    text = data['candidates'][0]['content']['parts'][0]['text']
                                 return text.strip()
+
                             except (KeyError, IndexError):
                                 self.log(f"[NEURAL] HATA: API yanıtı ayrıştırılamadı. Yanıt: {await resp.text()[:100]}...", "CRITICAL")
+                                # Hata durumunda ayrıştırma hatası mesajını döndür
                                 return "AI Cevabı ayrıştırılamadı."
                         
                         # Hata Kodları (Retry Gerekli)
@@ -115,12 +187,15 @@ class NeuralEngine:
                                 backoff_time = INITIAL_BACKOFF * (2 ** attempt) + random.uniform(0, 1)
                                 await asyncio.sleep(backoff_time)
                             else:
+                                # Son deneme başarısız
                                 return f"API Hatası: {resp.status}. Tüm denemeler başarısız."
                         
                         # Diğer Client Hataları (Retry Yok)
                         else:
+                            # 403 gibi hatalar burada yakalanır.
                             error_text = await resp.text()
                             self.log(f"[NEURAL] HATA: API client hatası aldı ({resp.status}). {error_text[:100]}...", "CRITICAL")
+                            # Hata mesajını döndür, böylece çağıran fonksiyon (generate_ai_payloads) yakalayabilir.
                             return f"API Hatası: {resp.status}"
                             
             except (aiohttp.client_exceptions.ClientConnectorError, asyncio.TimeoutError) as e:

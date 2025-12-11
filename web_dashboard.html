@@ -1,0 +1,474 @@
+<!-- path: web_dashboard.html -->
+<!-- PARS Pentest Autonomous Recon System - Müşteri (SaaS) Web Arayüzü Prototipi -->
+<!-- Bu dosya, yerel FastAPI sunucusu (127.0.0.1:8000) ile konuşmak için tasarlanmıştır. -->
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PARS CLOUD | Security Dashboard</title>
+    <!-- Tailwind CSS Yüklemesi -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Fontlar -->
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'syn-bg': '#0b0c15',       // Deep Space Dark
+                        'syn-panel': '#141526',    // Nebula Dark
+                        'syn-accent': '#fa1e4e',   // Alert Red
+                        'syn-cyan': '#00fff5',     // Cyber Cyan
+                        'syn-green': '#00e676',    // Success Green
+                        'syn-text-sec': '#a0a0b5', // Secondary Text
+                        'syn-gray-border': '#2d2e42',
+                    },
+                    fontFamily: {
+                        sans: ['Space Mono', 'sans-serif'],
+                        orbitron: ['Orbitron', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        /* Kaydırma çubuğu stilini cyberpunk temasına uydurma */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: #2d2e42;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background-color: #141526;
+        }
+
+        /* Terminal loglarına özel stil */
+        .terminal {
+            /* Renk geçiş efekti için geçici class */
+            transition: border-color 0.5s ease-in-out; 
+        }
+        .log-entry.active {
+            /* Çalışan modülün highlight'ı için kullanılabilir */
+            border-left: 3px solid var(--syn-cyan);
+            padding-left: 5px;
+        }
+    </style>
+</head>
+<body class="bg-syn-bg text-white min-h-screen p-4 md:p-8 font-sans antialiased">
+
+<div class="max-w-8xl mx-auto"> <!-- Ekranı daha da genişletmek için max-w-8xl -->
+    <!-- BAŞLIK ve DURUM -->
+    <header class="flex flex-col md:flex-row justify-between items-center border-b-2 border-syn-panel pb-4 mb-6">
+        <h1 class="text-3xl md:text-4xl font-orbitron font-bold mb-2 md:mb-0">PARS <span class="text-syn-accent">CLOUD</span></h1>
+        <div id="systemStatus" 
+             class="status-badge bg-syn-panel px-4 py-2 rounded shadow-lg border border-syn-green text-syn-green font-bold text-sm transition duration-300">
+            ● BAĞLANTI KONTROL EDİLİYOR...
+        </div>
+    </header>
+
+    <!-- KONTROL PANELİ -->
+    <div class="control-panel bg-syn-panel p-4 md:p-6 rounded-xl shadow-2xl flex flex-col lg:flex-row items-stretch lg:items-center gap-4 mb-6 border border-syn-cyan/30">
+        
+        <!-- URL GİRİŞİ -->
+        <input type="text" id="targetUrl" placeholder="https://hedef-site.com" value="http://testphp.vulnweb.com"
+               class="flex-grow bg-syn-bg border border-syn-gray-border text-white p-3 rounded-lg focus:ring-2 focus:ring-syn-cyan focus:border-syn-cyan placeholder-syn-text-sec transition duration-300 shadow-inner"
+               aria-label="Hedef URL">
+
+        <!-- TARAMA PROFİLİ SEÇİMİ -->
+        <select id="profileSelect" 
+                class="w-full lg:w-48 bg-syn-bg border border-syn-gray-border text-syn-cyan p-3 rounded-lg focus:ring-2 focus:ring-syn-cyan focus:border-syn-cyan transition duration-300 cursor-pointer shadow-inner">
+            <option value="FULL_SCAN">Derin Tarama (FULL)</option>
+            <option value="QUICK_SCAN">Hızlı Tarama (QUICK)</option>
+            <option value="API_AUDIT">API Denetimi (API)</option>
+            <option value="BUG_BOUNTY_CORE" selected>BUG BOUNTY CORE</option>
+        </select>
+
+        <!-- TARAMA BUTONU -->
+        <button onclick="startScan()" id="scanBtn"
+                class="h-12 w-full lg:w-48 bg-syn-accent text-white font-orbitron font-bold rounded-lg shadow-xl hover:bg-syn-accent/80 transition duration-300 active:bg-syn-accent/60">
+            TARAMAYI BAŞLAT
+        </button>
+    </div>
+
+    <!-- DASHBOARD GRİDİ (ANA ALAN) -->
+    <div class="dashboard-grid grid grid-cols-1 lg:grid-cols-4 xl:grid-cols-5 gap-6"> <!-- Ekranı 4 veya 5 parçaya böler -->
+        
+        <!-- SOL PANEL: MODÜL MATRİSİ (lg:col-span-1) -->
+        <div class="lg:col-span-1 xl:col-span-1 bg-syn-panel p-4 rounded-xl shadow-2xl border border-syn-panel/50">
+            <h2 class="text-syn-green text-base font-orbitron mb-4 border-b border-syn-gray-border pb-2">MODÜL MATRİSİ <span id="moduleCount" class="text-syn-text-sec text-sm">(24/24 Aktif)</span></h2>
+            <!-- Yeni Grid Düzeni: 3 Sütun -->
+            <div id="moduleMatrix" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto pr-2">
+                <!-- Modül Kartları Buraya Eklenir -->
+            </div>
+        </div>
+
+        <!-- ORTA PANEL: TERMİNAL (lg:col-span-2) -->
+        <div class="lg:col-span-2 xl:col-span-3 bg-syn-panel p-6 rounded-xl shadow-2xl border border-syn-panel">
+            <h2 class="text-syn-cyan text-lg font-orbitron mb-4 border-b border-syn-panel pb-2">CANLI LOGS & VULNERABILITY OUTPUT</h2>
+            <div id="terminalFrame" class="terminal bg-[#0f111a] border border-syn-gray-border rounded-lg h-[400px] p-4 overflow-y-auto text-sm shadow-inner">
+                <div id="consoleOutput">
+                    <!-- Loglar buraya eklenecek -->
+                    <div class="log-entry text-syn-text-sec mb-1 border-b border-transparent">[SYSTEM] PARS Cloud Web Arayüzü Hazır.</div>
+                    <div class="log-entry text-syn-text-sec mb-1 border-b border-transparent">[SYSTEM] Sunucu bağlantısı bekleniyor...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- SAĞ PANEL: İSTATİSTİK PANELİ (lg:col-span-1) -->
+        <div class="lg:col-span-1 xl:col-span-1 stats-panel flex flex-col gap-6">
+            <!-- SKOR KARTI -->
+            <div class="stat-card bg-syn-panel p-6 rounded-xl shadow-2xl border border-syn-cyan/50 text-center">
+                <div class="text-sm text-syn-text-sec font-bold uppercase">GÜVENLİK SKORU (CVSS Bazlı)</div>
+                <div class="stat-value font-orbitron text-5xl mt-3 text-syn-cyan" id="scoreValue">100</div>
+                <p class="text-xs text-syn-text-sec mt-2">Hedef sistemin genel zafiyet riski.</p>
+            </div>
+            
+            <!-- TEHDİT KARTI -->
+            <div class="stat-card bg-syn-panel p-6 rounded-xl shadow-2xl border border-syn-accent/50 text-center">
+                <div class="text-sm text-syn-text-sec font-bold uppercase">BULUNAN TEHDİTLER</div>
+                <div class="stat-value font-orbitron text-5xl mt-3 text-syn-accent" id="vulnValue">0</div>
+                <p class="text-xs text-syn-text-sec mt-2">Kritik ve Yüksek öncelikli bulgular.</p>
+            </div>
+
+            <!-- İLERLEME KARTI -->
+            <div class="stat-card bg-syn-panel p-6 rounded-xl shadow-2xl border border-syn-gray-border text-center">
+                <div class="text-sm text-syn-text-sec font-bold uppercase mb-2">İLERLEME DURUMU</div>
+                <div class="progress-container bg-syn-gray-border h-2.5 rounded-full overflow-hidden shadow-inner">
+                    <div id="progressBar" class="progress-bar h-full bg-syn-cyan transition-all duration-700 ease-out" style="width: 0%;"></div>
+                </div>
+                <div class="mt-2 text-syn-cyan font-bold" id="progressText">0%</div>
+                <div class="mt-1 text-xs text-syn-text-sec" id="statusPhase">Bekleniyor...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- TEMEL YAPILANDIRMA ---
+    const API_URL = "http://127.0.0.1:8000/api/v1"; // FastAPI URL'si
+    let currentScanId = null;
+    let pollInterval = null;
+    let seenLogs = new Set();
+    const consoleDiv = document.getElementById("consoleOutput");
+    const moduleMatrix = document.getElementById("moduleMatrix");
+    const moduleCardMap = {}; // Modül ismini (key) kart elementine (value) eşler.
+
+    // Modül Listesi (24 Kritik Tarayıcı)
+    const MODULE_LIST = [
+        { key: "WAF_DETECT", name: "WAF / Firewall" },
+        { key: "PRE_SCAN", name: "Param Discovery" },
+        { key: "SUBDOMAIN", name: "Subdomain Recon" },
+        { key: "SUBDOMAIN_TAKEOVER", name: "Takeover Check" },
+        { key: "PORT_SCAN", name: "Port Scanner" },
+        { key: "HEADERS", name: "HTTP Headers" },
+        { key: "FILES", name: "Sensitive Files" },
+        { key: "JS_FINDER", name: "JS Endpoints" }, // Yeni Eklendi
+        { key: "XSS", name: "XSS Scanner" },
+        { key: "SQLI", name: "SQLi Scanner" },
+        { key: "LFI", name: "LFI Scanner" },
+        { key: "IDOR", name: "IDOR Scanner" },
+        { key: "AUTH_BYPASS", name: "Auth Bypass" },
+        { key: "RCE_SSRF", name: "RCE / SSRF" }, // Yeni Eklendi
+        { key: "GRAPHQL", name: "GraphQL Audit" },
+        { key: "JSON_API", name: "JSON API Fuzzer" },
+        { key: "CLOUD_EXPLOIT", name: "CloudStorm" },
+        { key: "REACT_EXPLOIT", name: "React Exploit" }, // Yeni Eklendi
+        { key: "BUSINESS_LOGIC", name: "Business Logic Fuzzer" }, // Yeni Eklendi
+        { key: "CLIENT_LOGIC", name: "Client Logic Analyzer" }, // Yeni Eklendi
+        { key: "HTTP_SMUGGLING", name: "HTTP Smuggling" }, // Yeni Eklendi
+        { key: "NUCLEI", name: "Nuclei Engine" }, // Yeni Eklendi
+        { key: "INTERNAL_SCAN", name: "Internal Scanner" }, // Yeni Eklendi
+        { key: "OAUTH_SCANNER", name: "OAUTH / SSO" }, // Yeni Eklendi
+        { key: "HEURISTIC", name: "Heuristic Engine" },
+    ];
+
+    // Log Seviyelerine göre renk eşleştirme
+    const LOG_COLORS = {
+        INFO: 'text-syn-text-sec',
+        SUCCESS: 'text-syn-green',
+        WARNING: 'text-yellow-400',
+        CRITICAL: 'text-syn-accent',
+        HEADER: 'text-syn-cyan text-base font-bold',
+        CMD: 'text-syn-cyan/80',
+        ERROR: 'text-syn-accent'
+    };
+
+    // --- MODÜL MATRİSİNİ OLUŞTURMA ---
+    function initializeModuleMatrix() {
+        moduleMatrix.innerHTML = '';
+        MODULE_LIST.forEach(module => {
+            const card = document.createElement("div");
+            card.id = `card-${module.key}`;
+            card.className = `module-card bg-syn-bg p-2 rounded-lg border border-syn-gray-border shadow-md transition-all duration-300 transform hover:scale-[1.02] cursor-default`;
+            
+            // KART İÇERİĞİ
+            card.innerHTML = `
+                <div class="flex items-center justify-between text-xs font-bold font-orbitron">
+                    <span class="text-syn-text-sec truncate">${module.name}</span>
+                    <span id="dot-${module.key}" class="text-gray-500 text-base">●</span>
+                </div>
+                <div class="text-[10px] text-syn-text-sec/70 mt-1">Status: <span id="status-${module.key}">Idle</span></div>
+            `;
+            
+            moduleMatrix.appendChild(card);
+            moduleCardMap[module.key] = { 
+                card: card, 
+                dot: document.getElementById(`dot-${module.key}`),
+                status: document.getElementById(`status-${module.key}`)
+            };
+        });
+        document.getElementById("moduleCount").innerText = `(${MODULE_LIST.length}/${MODULE_LIST.length} Aktif)`;
+        log(`${MODULE_LIST.length} Core Tarama Modülü başarıyla yüklendi.`, "SUCCESS");
+    }
+
+    // --- MODÜL DURUMUNU GÜNCELLEME (Loglara Dayanarak) ---
+    function updateModuleStatusFromLog(msg) {
+        // Log formatı: [MODÜL_ADI] Mesaj...
+        const match = msg.match(/^\[([A-Z_]+)\]/);
+        if (!match) return;
+
+        const moduleKey = match[1];
+
+        // LOG'dan gelen MODÜL_ADI'nı (örn: SUBDOMAIN_TAKEOVER) kısaltılmış listemizle eşleştirme
+        // Bu, motor tarafından gönderilen log formatına bağlıdır.
+        let actualKey = moduleKey;
+        // Özel Eşleşmeler (Eğer log anahtarı modül listesindeki ile birebir uyuşmuyorsa, burası önemli)
+        // NOT: Motor genellikle tam Python dosya adlarını (büyük harfle) gönderir.
+        
+        const cardInfo = moduleCardMap[actualKey] || moduleCardMap[moduleKey];
+
+        if (cardInfo) {
+            // Animasyon ve Renk Değişimi
+            const isFinished = msg.includes("completed") || msg.includes("Finished") || msg.includes("Sonlandı");
+            const isStarting = !isFinished && (msg.includes("Initiated") || msg.includes("Starting") || msg.includes("Başlatıldı"));
+            
+            if (isStarting) {
+                // Çalışıyor (Cyan)
+                cardInfo.dot.className = "text-syn-cyan text-base animate-pulse";
+                cardInfo.card.classList.add('border-syn-cyan', 'shadow-syn-cyan/50', 'bg-[#1a2333]');
+                cardInfo.card.classList.remove('border-syn-gray-border', 'border-syn-green/50');
+                cardInfo.status.innerText = "Running";
+            } else if (isFinished) {
+                // Tamamlandı (Green)
+                cardInfo.dot.className = "text-syn-green text-base";
+                cardInfo.card.classList.remove('border-syn-cyan', 'shadow-syn-cyan/50', 'bg-[#1a2333]');
+                cardInfo.card.classList.add('border-syn-green/50');
+                cardInfo.status.innerText = "Completed";
+            }
+        }
+    }
+
+    // --- LOG YAZMA İŞLEVİ ---
+    function log(msg, level) {
+        const levelKey = LOG_COLORS.hasOwnProperty(level) ? level : 'INFO';
+        const colorClass = LOG_COLORS[levelKey];
+
+        const entry = document.createElement("div");
+        entry.className = `log-entry mb-1 border-b border-syn-panel/50 ${colorClass}`;
+        entry.innerHTML = `&gt; ${msg}`;
+        
+        consoleDiv.appendChild(entry);
+        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        
+        // Modül durumu güncellemesi için log satırını gönder
+        updateModuleStatusFromLog(msg);
+    }
+
+    // --- BAĞLANTI KONTROLÜ ---
+    async function checkConnection() {
+        const statusBadge = document.getElementById("systemStatus");
+        try {
+            const res = await fetch(API_URL.replace('/api/v1', '/')); // Sadece kök dizini kontrol et
+            if(res.ok) {
+                statusBadge.classList.remove('border-syn-accent', 'text-syn-accent');
+                statusBadge.classList.add('border-syn-green', 'text-syn-green');
+                statusBadge.innerText = "● API ONLINE";
+                log("Sunucu bağlantısı başarılı.", "SUCCESS");
+            } else {
+                throw new Error("API not ready");
+            }
+        } catch(e) {
+            statusBadge.classList.remove('border-syn-green', 'text-syn-green');
+            statusBadge.classList.add('border-syn-accent', 'text-syn-accent');
+            statusBadge.innerText = "● API OFFLINE";
+            log("Sunucuya bağlanılamadı! Lütfen 'start_server.py' dosyasının çalıştığından emin olun.", "CRITICAL");
+        }
+    }
+
+    // --- TARAMA BAŞLATMA ---
+    async function startScan() {
+        const urlInput = document.getElementById("targetUrl");
+        const profileInput = document.getElementById("profileSelect");
+        const scanBtn = document.getElementById("scanBtn");
+        
+        const url = urlInput.value.trim();
+        const profile = profileInput.value;
+
+        if(!url) return alert("Lütfen bir hedef URL girin!");
+        
+        // UI Kilitlenmesi
+        scanBtn.disabled = true;
+        scanBtn.innerText = "TARAMA BAŞLATILIYOR...";
+        scanBtn.classList.remove('bg-syn-accent', 'bg-red-600');
+        scanBtn.classList.add('bg-syn-cyan/50');
+        
+        seenLogs.clear();
+        consoleDiv.innerHTML = "";
+        
+        // Modül Kartlarını Sıfırla
+        initializeModuleMatrix();
+
+        // İstatistikleri Sıfırla
+        document.getElementById("scoreValue").innerText = "---";
+        document.getElementById("vulnValue").innerText = "---";
+        document.getElementById("progressBar").style.width = "0%";
+        document.getElementById("progressText").innerText = "0%";
+        document.getElementById("statusPhase").innerText = "Bağlantı Kuruluyor...";
+
+        try {
+            log(`Tarama emri gönderiliyor. Hedef: ${url} (${profile})`, "INFO");
+            
+            // TODO: Kimlik doğrulama/kullanıcı kimliği ekle
+            const response = await fetch(API_URL + "/scan/start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ target_url: url, profile: profile, user_id: "DEVELOPER_TEST" })
+            });
+            
+            const data = await response.json();
+            
+            if (response.status !== 200) {
+                 throw new Error(data.detail || "API'den bilinmeyen hata döndü.");
+            }
+            
+            currentScanId = data.scan_id;
+            log(`Tarama Başlatıldı! Scan ID: ${currentScanId}`, "SUCCESS");
+            
+            // Polling başlat
+            if(pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(checkStatus, 1500);
+            scanBtn.innerText = "DURDUR (ÇALIŞIYOR)";
+            scanBtn.classList.remove('bg-syn-cyan/50');
+            scanBtn.classList.add('bg-red-600');
+            scanBtn.onclick = stopScan; // Durdurma fonksiyonunu bağla
+
+        } catch(e) {
+            log(`Hata: Tarama başlatılamadı: ${e.message}`, "CRITICAL");
+            
+            // UI Kilitlenmesini Kaldır
+            scanBtn.disabled = false;
+            scanBtn.innerText = "TARAMAYI BAŞLAT";
+            scanBtn.classList.add('bg-syn-accent');
+            scanBtn.classList.remove('bg-syn-cyan/50', 'bg-red-600');
+        }
+    }
+    
+    // --- TARAMA DURDURMA ---
+    async function stopScan() {
+        if (!currentScanId) return;
+        
+        const scanBtn = document.getElementById("scanBtn");
+        scanBtn.disabled = true;
+        scanBtn.innerText = "DURDURULUYOR...";
+        scanBtn.classList.remove('bg-red-600');
+        scanBtn.classList.add('bg-syn-text-sec');
+        
+        try {
+            // API'ye durdurma isteği gönder (Bu endpoint'in API sunucusunda eklenmesi gerekecektir)
+            await fetch(`${API_URL}/scan/${currentScanId}/stop`, { method: "POST" });
+            log("[SYSTEM] Manuel durdurma komutu API'ye gönderildi.", "WARNING");
+        } catch(e) {
+            log("[SYSTEM] API'ye durdurma isteği gönderilemedi. Polling sonlandırılıyor.", "CRITICAL");
+        }
+
+        clearInterval(pollInterval);
+        
+        setTimeout(() => {
+            scanBtn.disabled = false;
+            scanBtn.innerText = "TARAMAYI BAŞLAT";
+            scanBtn.classList.add('bg-syn-accent');
+            scanBtn.classList.remove('bg-syn-text-sec');
+            currentScanId = null;
+        }, 3000);
+    }
+
+    // --- DURUM KONTROLÜ (Polling) ---
+    async function checkStatus() {
+        if(!currentScanId) return;
+        
+        try {
+            const res = await fetch(`${API_URL}/scan/${currentScanId}/status`);
+            const data = await res.json();
+            
+            // --- İstatistik Güncelleme ---
+            const score = data.score !== undefined ? data.score : 0;
+            const findings = data.findings_count !== undefined ? data.findings_count : 0;
+            const phase = data.current_phase || "Analiz Ediliyor...";
+
+            document.getElementById("scoreValue").innerText = score.toFixed(1);
+            document.getElementById("vulnValue").innerText = findings;
+            
+            const progress = Math.round((data.progress || 0) * 100);
+            document.getElementById("progressBar").style.width = progress + "%";
+            document.getElementById("progressText").innerText = progress + "%";
+            document.getElementById("statusPhase").innerText = phase;
+            
+            // --- Log Güncelleme ---
+            (data.logs || []).forEach(logLine => {
+                if(!seenLogs.has(logLine)) {
+                    // Log parse et: [LEVEL] Mesaj...
+                    let level = "INFO";
+                    let msg = logLine;
+                    // Log formatı: "[LEVEL] Mesaj"
+                    const match = logLine.match(/^\[(INFO|SUCCESS|WARNING|CRITICAL|HEADER|CMD|ERROR|[A-Z_]+)\]\s*(.*)/);
+                    if(match) {
+                        level = match[1];
+                        msg = match[2];
+                    }
+                    log(msg, level);
+                    seenLogs.add(logLine);
+                }
+            });
+            
+            // --- Sonlandırma Kontrolü ---
+            const scanBtn = document.getElementById("scanBtn");
+            if(data.status === "completed" || data.status === "failed" || data.status === "aborted") {
+                clearInterval(pollInterval);
+                scanBtn.disabled = false;
+                scanBtn.innerText = "TARAMAYI BAŞLAT";
+                scanBtn.classList.add('bg-syn-accent');
+                scanBtn.classList.remove('bg-red-600', 'bg-syn-cyan/50');
+
+                const statusLevel = data.status === "completed" ? "SUCCESS" : "CRITICAL";
+                log(`Tarama ${data.status.toUpperCase()} olarak sonlandı.`, statusLevel);
+                
+                // Final Score ve İlerleme
+                document.getElementById("scoreValue").innerText = score.toFixed(1);
+                document.getElementById("progressBar").style.width = "100%";
+                document.getElementById("progressText").innerText = "100%";
+                document.getElementById("statusPhase").innerText = data.status === "completed" ? "Rapor Hazır" : "İşlem Sonlandı";
+
+                // Rapor indirme butonu placeholder'ı
+                log("Rapor indirme akışını başlatmak için 'Raporlar' sayfasını kontrol edin. (Yakında)", "INFO");
+                currentScanId = null; // Tarama bitti
+            }
+            
+        } catch(e) {
+            console.error("Status check error:", e);
+        }
+    }
+
+    // --- BAŞLANGIÇTA ÇALIŞTIR ---
+    initializeModuleMatrix(); // Modül matrisini ilk başta oluştur.
+    checkConnection();
+</script>
+
+</body>
+</html>

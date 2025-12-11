@@ -2,6 +2,8 @@
 
 from typing import List, Dict, Any, Union
 import random
+import string # Yeni eklendi: generate_random_string için
+import json 
 
 class MockHTTPResponse:
     """
@@ -36,8 +38,12 @@ class MockHTTPResponse:
     
     async def json(self) -> Any:
         """JSON verisi döndürür."""
-        import json
-        return json.loads(self._content)
+        # Olası json hatalarını yakalamak için try/except eklenmelidir
+        try:
+            return json.loads(self._content)
+        except json.JSONDecodeError:
+            # Hata durumunda boş bir diksiyonel döndür veya hata fırlat
+            return {}
 
 
 class DataSimulator:
@@ -175,3 +181,22 @@ class DataSimulator:
         <pre>{file_content}</pre>
         """
         return MockHTTPResponse(200, {}, content, random.uniform(0.3, 0.6))
+
+    # --- 3. AI ENTEGRASYONU YEDEK METOTLARI (HATA 1 ÇÖZÜMÜ) ---
+    @staticmethod
+    def simulate_ai_payloads(context: str, count: int = 5) -> List[str]:
+        """
+        AI motoru devre dışı kaldığında veya API anahtarı eksik olduğunda
+        kullanılacak mock/simülasyon payload'larını döndürür.
+        """
+        # Hata 1'in kesin çözümü: Sadece List[str] döndürülmeli.
+        return [f"[SIMULATED_PAYLOAD::{context.upper()}_{i}]" for i in range(count)]
+
+    # --- 4. RASTGELE DİZE ÜRETİMİ (HATA 4 ÇÖZÜMÜ) ---
+    @staticmethod
+    def generate_random_string(length: int = 12) -> str:
+        """
+        HTTP Smuggling gibi modüller için rastgele dize üretir.
+        """
+        # Hata 4'ün çözümü: Rastgele string üretimi eklenmiştir.
+        return ''.join(random.choice(string.ascii_letters) for _ in range(length))

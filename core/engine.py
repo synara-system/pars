@@ -1,33 +1,34 @@
 # path: core/engine.py
 
 import datetime
-import asyncio  # Asenkron çalışma için eklendi
-import aiohttp  # Asenkron HTTP istekleri için eklendi
-import time  # Yüksek hassasiyetli zaman ölçümü için eklendi
-import threading  # YENİ: Dinamik tarayıcı yönetimi için
-import sys  # YENİ: Platform kontrolü için eklendi (Windows Fix)
+import asyncio
+import aiohttp
+import time
+import threading
+import sys
 import shutil
-import os  # YENİ: Dosya yolu kontrolü için
-import statistics  # YENİ: P90 hesaplaması için
-import re  # Port analizi için
-import json  # YENİ: Protected Domains JSON dosyasını okumak için
-import math  # Adaptif timeout için
-import random  # YENİ FAZ 7: Jitter için eklendi
+import os
+import statistics
+import re
+import json
+import math
+import random
+import concurrent.futures # FAZ 26: ThreadPoolExecutor için
 
-from .dynamic_scanner import DynamicScanner  # GÖRECELİ İMPORT: Headless tarayıcı (Selenium) entegrasyonu için
-from .exploit_manager import ExploitManager  # GÖRECELİ İMPORT: FAZ 11: Yeni Exploit Yöneticisi
-from .dynamic_script_manager import DynamicScriptManager  # GÖRECELİ İMPORT: FAZ 12: Dinamik Aksiyon Yöneticisi
-from .oob_listener import OOBListener # YENİ: OOB Sinyal Takibi için
-from .proxy_manager import ProxyManager # YENİ FAZ 21: Canlı Proxy Yöneticisi
+from .dynamic_scanner import DynamicScanner
+from .exploit_manager import ExploitManager
+from .dynamic_script_manager import DynamicScriptManager
+from .oob_listener import OOBListener
+from .proxy_manager import ProxyManager
 # YENİ: Neural Engine (Yapay Zeka)
-from .neural_engine import NeuralEngine 
-from typing import List, Dict, Any, Optional # YENİ: Optional import edildi
-from urllib.parse import urlparse  # YENİ: URL parse etmek için
+from .neural_engine import NeuralEngine
+from typing import List, Dict, Any, Optional, Tuple
+from urllib.parse import urlparse
 
 # Mimarinin diğer bileşenleri
-from .reporter import SynaraReporter  # GÖRECELİ İMPORT
+from .reporter import SynaraReporter
 # Faz 3: Payload Generator'ı import et (Diğer modüller tarafından kullanılabilir olması için)
-from .payload_generator import PayloadGenerator # GÖRECELİ İMPORT
+from .payload_generator import PayloadGenerator
 # FAZ 18: Auto-POC Generator Entegrasyonu
 from .poc_generator import POCGenerator
 # GHOST PROTOCOL: Veri Simülatöründen User-Agent listesini çek
@@ -58,7 +59,7 @@ from .scanners.port_scanner import PortScanner
 # FAZ 15: WAF Dedektörü eklendi
 from .scanners.waf_detector import WAFDetector
 # FAZ 19: Subdomain Tarayıcı eklendi
-from .scanners.subdomain_scanner import DiscoveryOrchestrator 
+from .scanners.subdomain_scanner import DiscoveryOrchestrator
 # FAZ 19: Subdomain Takeover Tarayıcı (YENİ)
 from .scanners.subdomain_takeover import SubdomainTakeoverScanner
 # FAZ 22: Nuclei Entegrasyonu eklendi
@@ -79,34 +80,32 @@ from .scanners.client_logic_analyzer import ClientLogicAnalyzer
 from .scanners.http_smuggling_scanner import HTTPSmugglingScanner
 # YENİ MODÜL: Business Logic Fuzzer (Phase 33)
 from .scanners.business_logic_fuzzer import BusinessLogicFuzzer
-
+# YENİ MODÜL: OSINT Scanner (Faz 19 - OSINT)
+from .scanners.osint_scanner import OSINTScanner
+# YENİ MODÜL: Leakage Scanner (Faz 24 - PII Leakage)
+from .scanners.leakage_scanner import LeakageScanner
 
 # --- KONFIGURASYON SABİTLERİ ---
-# Global eşzamanlı HTTP istek limiti (Ağ şişmesini ve hedef sistemi yavaşlatmayı engeller)
 MAX_GLOBAL_CONCURRENCY = 10
-# Her bir modülün kendi içinde kullanabileceği maksimum eşzamanlı görev sayısı
 PER_MODULE_LIMIT = 5
-# NucleiScanner için özel limit (Dış işlem olduğu için daha düşük tutuldu)
 NUCLEI_LIMIT = 3
+MAX_WORKER_THREADS = 10
 # ---------------------------------------------------
 
 # --- GÜVENLİK ZAMAN AŞIMI (ANTI-FREEZE) ---
-# Bir modül (örn: PortScanner) bu sürede yanıt vermezse motor onu zorla kapatır ve devam eder.
-MODULE_HARD_TIMEOUT = 90  # KRİTİK DÜZELTME: 240'tan 90 saniyeye düşürüldü.
+MODULE_HARD_TIMEOUT = 90
 # ------------------------------------------
 
 # --- ADAPTİF ZAMAN AŞIMI SABİTLERİ (YENİ) ---
-MIN_TIMEOUT = 2.0  # Minimum zaman aşımı saniye
-MAX_TIMEOUT = 7.0  # Maksimum zaman aşımı saniye
+MIN_TIMEOUT = 2.0
+MAX_TIMEOUT = 7.0
 # --------------------------------------------
 
 # --- DENEME SAYISI (RETRY) SABİTİ (YENİ) ---
-# Deneme sayısı 1'e düşürüldü (Initial attempt + 0 retries)
 MAX_REQUEST_RETRIES = 1
 # ------------------------------------------
 
 # --- JS ENDPOINT EXTRACTOR SABİTİ (YENİ FAZ 6) ---
-# Endpoint'leri yakalamak için Regex (php, json, js, jsp, aspx)
 JS_ENDPOINT_PATTERN = r'[A-Za-z0s9_\-]+\.(php|json|js|jsp|aspx)'
 # --------------------------------------------------
 
@@ -115,8 +114,10 @@ FP_DB_PATH = "fp_database.json"
 # ------------------------------------------------------
 
 # --- TOKEN BUCKET RATE LIMIT SABİTLERİ (YENİ FAZ 7) ---
-MAX_QPS = 5.0  # Maksimum sorgu/saniye
-BURST = 10.0   # Token biriktirme kapasitesi (Burst)
+MAX_QPS = 5.0
+BURST = 10.0
+# FAZ 27: Maksimum tek seferlik bekleme süresi (Hata 3 Çözümü)
+MAX_THROTTLE_WAIT_TIME = 2.5 # KRİTİK DÜZELTME: 1.5'tan 2.5'a çıkarıldı.
 # ------------------------------------------------------
 
 
@@ -125,17 +126,17 @@ SCAN_PROFILES = {
     # GUI'nin beklediği FULL_SCAN'ı geri ekledik (KeyError'ı engeller)
     "FULL_SCAN": {
         "description": "Tüm modüller (Hafiften Kapsamlı Fuzzing'e kadar). En yavaş ve en derin tarama.",
-        "modules": ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'HEADERS', 'FILES', 'PORT_SCAN', 'HEURISTIC', 'AUTH_BYPASS', 'LFI', 'XSS', 'SQLI', 'IDOR', 'RCE_SSRF', 'JSON_API', 'CLOUD_EXPLOIT', 'REACT_EXPLOIT', 'NUCLEI', 'INTERNAL_SCAN', 'JS_ENDPOINT', 'GRAPHQL', 'CLIENT_LOGIC', 'HTTP_SMUGGLING', 'BUSINESS_LOGIC']
+        "modules": ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'HEADERS', 'FILES', 'PORT_SCAN', 'HEURISTIC', 'AUTH_BYPASS', 'LFI', 'XSS', 'SQLI', 'IDOR', 'RCE_SSRF', 'JSON_API', 'CLOUD_EXPLOIT', 'REACT_EXPLOIT', 'NUCLEI', 'INTERNAL_SCAN', 'JS_ENDPOINT', 'GRAPHQL', 'CLIENT_LOGIC', 'HTTP_SMUGGLING', 'BUSINESS_LOGIC', 'OSINT', 'LEAKAGE'] # YENİ: OSINT, LEAKAGE
     },
     # KRİTİK KAZANÇ PROFİLİ (Kullanıcının tercih ettiği modül listesi)
     "BUG_BOUNTY_CORE": {
         "description": "BBH (Bug Bounty Hunter - SADECE KAZANÇ): Yüksek Ödüllü Kritik Zafiyetler ve Gelişmiş Keşif için optimize edilmiştir.",
-        "modules": ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'JS_ENDPOINT', 'HEADERS', 'FILES', 'HEURISTIC', 'AUTH_BYPASS', 'LFI', 'XSS', 'SQLI', 'IDOR', 'RCE_SSRF', 'REACT_EXPLOIT', 'JSON_API', 'CLOUD_EXPLOIT', 'PORT_SCAN', 'CLIENT_LOGIC', 'HTTP_SMUGGLING', 'BUSINESS_LOGIC']
+        "modules": ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'JS_ENDPOINT', 'HEADERS', 'FILES', 'HEURISTIC', 'AUTH_BYPASS', 'LFI', 'XSS', 'SQLI', 'IDOR', 'RCE_SSRF', 'REACT_EXPLOIT', 'JSON_API', 'CLOUD_EXPLOIT', 'PORT_SCAN', 'CLIENT_LOGIC', 'HTTP_SMUGGLING', 'BUSINESS_LOGIC', 'OSINT', 'LEAKAGE'] # YENİ: OSINT, LEAKAGE
     },
     # Diğer eski modüller (GUI'nin ihtiyacı için geri getirildi)
     "LIGHT": {
         "description": "Sadece Temel Analiz ve Zeka (Headers, Files, Heuristic). Çok hızlı.",
-        "modules": ['WAF_DETECT', 'SUBDOMAIN', 'PRE_SCAN', 'JS_ENDPOINT', 'HEADERS', 'FILES', 'PORT_SCAN', 'HEURISTIC', 'INTERNAL_SCAN', 'CLIENT_LOGIC']
+        "modules": ['WAF_DETECT', 'SUBDOMAIN', 'PRE_SCAN', 'JS_ENDPOINT', 'HEADERS', 'FILES', 'PORT_SCAN', 'HEURISTIC', 'INTERNAL_SCAN', 'CLIENT_LOGIC', 'OSINT', 'LEAKAGE'] # YENİ: OSINT, LEAKAGE
     },
     "FUZZING_ONLY": {
         "description": "Sadece Fuzzing Modülleri (XSS, SQLi, LFI, RCE).",
@@ -147,40 +148,43 @@ SCAN_PROFILES = {
     }
 }
 
-# AR-GE: SYNARA GERÇEKLİK PUANI (SRP) V3.0 - MODÜL AĞIRLIKLARI (Maksimum Tek Seferlik Düşüş)
-# Port cezası agresif hale getirildi.
-MODULE_WEIGHTS = {
-    "SQLI": 20.0,      # SQL Injection (En kritik)
-    "RCE_SSRF": 18.0,  # RCE/SSRF
-    "REACT_RCE": 25.0, # YENİ: React2Shell (CVSS 10.0)
-    "LFI": 15.0,       # Local File Inclusion
-    "AUTH_BYPASS": 12.0,  # Yetki Bypass
-    "XSS": 10.0,       # XSS (Farklı tipleri tek zafiyet say)
-    "IDOR": 8.0,       # IDOR
-    "FILES": 6.0,      # Hassas Dosya İfşası (robots.txt hariç)
-    "HEADERS": 0.0,    # GÜNCELLENDİ (Playtika Filtresi): Güvenlik Başlıkları Kapsam Dışı.
-    "HEURISTIC": 3.0,  # Genel Heuristik Uyarılar
-    "JSON_API": 3.0,   # API Fuzzing/Hata İfşası
-    "GRAPHQL": 12.0,   # GraphQL Introspection/Injection (Yüksek Risk)
-    "CLOUD_EXPLOIT": 25.0, # YENİ: Bulut Metadata/S3 İfşası (Çok Kritik)
-    "SUBDOMAIN_TAKEOVER": 25.0, # YENİ: Domain Snatching (Çok Kritik)
-    "HTTP_SMUGGLING": 22.0, # YENİ: HTTP/2 Request Smuggling (Phase 32 - ÇOK KRİTİK)
-    "CLIENT_LOGIC": 18.0, # YENİ: Client-Side Logic/Source Map Secret Hunting (Phase 31)
-    "BUSINESS_LOGIC": 18.0, # YENİ: Stateful Business Logic Fuzzing (Phase 33)
-    "PORT_SCAN": 0.0,  # GÜNCELLENDİ (Playtika Filtresi): Banner/Port Taraması Kapsam Dışı.
-    "WAF_DETECT": 0.0, # GÜNCELLENDİ (Playtika Filtresi): WAF Tespiti Kapsam Dışı.
-    "SUBDOMAIN": 0.0,  # Sadece Bilgi Amaçlı
-    "NUCLEI": 0.0,     # Nuclei sonuçları ayrı değerlendirilebilir, şimdilik 0
-    "CHAINING": 15.0,  # Zafiyet Zincirleme (Ekstra düşüş)
-    "SYSTEM": 5.0,     # Kritik Sistem/Motor Hatası (Genel hatalar için düşürüldü)
-    "INTERNAL_SCAN": 20.0  # YENİ: Dahili sistem sızıntısı (Hardcoded sır vb.)
-}
 
 class SynaraScannerEngine:
     """
     Synara'nın ana tarama motoru. Zafiyet modüllerini (plugin) yükler,
     tarama sürecini yönetir, sonuçları biriktirir ve skoru hesaplar.
     """
+    # AR-GE: SYNARA GERÇEKLİK PUANI (SRP) V3.0 - MODÜL AĞIRLIKLARI (Hata 2 Garantisi)
+    # Global değişken yerine Sınıf değişkeni olarak tanımlandı.
+    MODULE_WEIGHTS = {
+        "SQLI": 20.0,      # SQL Injection (En kritik)
+        "RCE_SSRF": 18.0,  # RCE/SSRF
+        "REACT_RCE": 25.0, # YENİ: React2Shell (CVSS 10.0)
+        "LFI": 15.0,       # Local File Inclusion
+        "AUTH_BYPASS": 12.0,  # Yetki Bypass
+        "XSS": 10.0,       # XSS (Farklı tipleri tek zafiyet say)
+        "IDOR": 8.0,       # IDOR
+        "FILES": 6.0,      # Hassas Dosya İfşası (robots.txt hariç)
+        "HEADERS": 0.0,    # GÜNCELLENDİ (Playtika Filtresi): Güvenlik Başlıkları Kapsam Dışı.
+        "HEURISTIC": 3.0,  # Genel Heuristik Uyarılar
+        "JSON_API": 3.0,   # API Fuzzing/Hata İfşası
+        "GRAPHQL": 12.0,   # GraphQL Introspection/Injection (Yüksek Risk)
+        "CLOUD_EXPLOIT": 25.0, # YENİ: Bulut Metadata/S3 İfşası (Çok Kritik)
+        "SUBDOMAIN_TAKEOVER": 25.0, # YENİ: Domain Snatching (Çok Kritik)
+        "HTTP_SMUGGLING": 22.0, # YENİ: HTTP/2 Request Smuggling (Phase 32 - ÇOK KRİTİK)
+        "CLIENT_LOGIC": 18.0, # YENİ: Client-Side Logic/Source Map Secret Hunting (Phase 31)
+        "BUSINESS_LOGIC": 18.0, # YENİ: Stateful Business Logic Fuzzing (Phase 33)
+        "PORT_SCAN": 5.0,  # DÜZELTME 4: 0.0'dan 5.0'a çıkarıldı (Zincirleme ve SRP uyumu için)
+        "WAF_DETECT": 0.0, # GÜNCELLENDİ (Playtika Filtresi): WAF Tespiti Kapsam Dışı.
+        "SUBDOMAIN": 0.0,  # Sadece Bilgi Amaçlı
+        "NUCLEI": 0.0,     # Nuclei sonuçları ayrı değerlendirilebilir, şimdilik 0
+        "CHAINING": 15.0,  # Zafiyet Zincirleme (Ekstra düşüş)
+        "SYSTEM": 5.0,     # Kritik Sistem/Motor Hatası (Genel hatalar için düşürüldü)
+        "INTERNAL_SCAN": 20.0,  # YENİ: Dahili sistem sızıntısı (Hardcoded sır vb.)
+        "OSINT": 4.0,      # YENİ: OSINT Bilgi Sızıntısı (Whois/E-posta ifşası)
+        "LEAKAGE": 25.0    # YENİ: Kritik PII/Secret Key Sızıntısı (Çok Kritik - FAZ 24)
+    }
+
     # Faz 10: Varsayılan profil
     DEFAULT_PROFILE = "BUG_BOUNTY_CORE" # KRİTİK DEĞİŞİKLİK
 
@@ -192,6 +196,8 @@ class SynaraScannerEngine:
         self.log = logger_callback if logger_callback else self._headless_log
         self.progress_update = progress_callback if progress_callback else self._headless_progress
         
+        # NOTE: self.MODULE_WEIGHTS = MODULE_WEIGHTS ataması sınıf seviyesine taşındı.
+        
         self.score = 100.0  # Faz 10: Float'a çevrildi
         self.results = []
         self.start_time = None
@@ -202,7 +208,7 @@ class SynaraScannerEngine:
         # PROXY AYARI: Programevi gibi statik hedefler için False,
         # Lido/Sushi gibi WAF'lı hedefler için True yap.
         # Varsayılan olarak False (Hız ve Stabilite için)
-        self.use_proxy = False 
+        self.use_proxy = False
         
         # Proxy Manager Başlatma (enabled parametresi ile)
         self.proxy_manager = ProxyManager(self.log, enabled=self.use_proxy)
@@ -210,14 +216,14 @@ class SynaraScannerEngine:
         # Neural Engine Başlatma (Gemini API)
         # API anahtarını çevre değişkeninden veya gui_main.py'den alacak
         # Şimdilik boş bırakıyoruz, kullanıcı GUI'den girmeli veya .env'den okumalı
-        self.neural_engine = NeuralEngine(self.log) 
+        self.neural_engine = NeuralEngine(self.log)
 
         # Faz 10: Yapılandırma değişkenleri
         self.config_profile = config_profile
         self.total_cvss_deduction = 0.0  # KRİTİK DÜZELTME: Raporlama için geri eklendi.
 
         # YENİ: Her modül için düşüşün bir kez yapıldığını takip et
-        self.module_deduction_tracker = {mod: False for mod in MODULE_WEIGHTS.keys()}
+        self.module_deduction_tracker = {mod: False for mod in self.MODULE_WEIGHTS.keys()}
         # YENİ KRITİK: Port tarama için ayrı takipçi (Birden fazla kritik port cezası için)
         self.port_deduction_tracker = set()
 
@@ -270,6 +276,10 @@ class SynaraScannerEngine:
         # Bu bayrak True olduğunda tüm döngüler kırılır.
         self.stop_requested = False
         # ------------------------------
+        
+        # FAZ 26: Blocking I/O için Thread Havuzu
+        self.thread_executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS)
+        self.log(f"[PERFORMANS] Thread Pool Executor başlatıldı (Workers: {MAX_WORKER_THREADS}).", "INFO")
 
     # --- HEADLESS HELPER FUNCTIONS ---
     def _headless_log(self, message, level="INFO"):
@@ -289,6 +299,18 @@ class SynaraScannerEngine:
         if getattr(sys, 'frozen', False):
             return os.path.dirname(sys.executable)
         return os.getcwd()
+
+    def _get_hostname(self, url: str) -> str:
+        """URL'den hostname'i ayıklar."""
+        try:
+            # KRİTİK EKSİK METOT: URL'den temiz hostname'i (www. ve portlar olmadan) ayıklar.
+            parsed = urlparse(url)
+            netloc = parsed.netloc.split(':')[0]
+            if netloc.startswith('www.'):
+                return netloc[4:]
+            return netloc
+        except:
+            return ""
 
     def _load_protected_domains(self) -> List[str]:
         """protected_domains.json dosyasını okur ve listeyi döndürür."""
@@ -337,17 +359,24 @@ class SynaraScannerEngine:
 
     def _is_false_positive(self, category: str, message: str) -> bool:
         """
-        ML tabanlı simülasyon: Sonucun daha önce raporlanmış bir FP olup olmadığını kontrol eder.
+        DÜZELTME 3: ML tabanlı simülasyon: Sonucun daha önce raporlanmış bir FP olup olmadığını REGEX ile kontrol eder.
         """
         if not self.fp_database:
             return False
 
-        # Basit karşılaştırma mantığı (ML simülasyonu)
-        # Gerçek ML burada bir vektör karşılaştırması yapardı.
+        # Basit regex tabanlı karşılaştırma mantığı (ML simülasyonu)
+        lower_message = message.lower()
+        
         for fp_entry in self.fp_database:
             if fp_entry.get("category") == category:
-                # Eğer mesajın büyük bir kısmı bilinen FP mesajını içeriyorsa, FP olarak işaretle
-                if fp_entry.get("message", "").lower() in message.lower():
+                # Eğer mesajın herhangi bir kısmı bilinen FP mesajını içeriyorsa (regex ile daha esnek)
+                fp_message = fp_entry.get("message", "").lower()
+                
+                # Regex'i özel karakterlerden kaçınarak oluştur
+                escaped_fp_message = re.escape(fp_message)
+                
+                # Eğer FP mesajı, tarama sonucunun içinde bulunuyorsa, FP olarak işaretle
+                if re.search(escaped_fp_message, lower_message):
                     self.log(f"[{category} | FP TESPİTİ] Bulgu, bilinen hata pozitif veritabanı ile eşleşti. Raporlama atlandı.", "INFO")
                     return True
         return False
@@ -381,7 +410,7 @@ class SynaraScannerEngine:
                 total_deduction += res['cvss_score']
 
             # Diğer Modüller için normal kural (Modül başına bir kez)
-            elif category in MODULE_WEIGHTS and category != "PORT_SCAN" and category not in deductions_applied and res['cvss_score'] > 0:
+            elif category in self.MODULE_WEIGHTS and category not in ["PORT_SCAN", "SYSTEM"]:
                 total_deduction += res['cvss_score']
                 deductions_applied.add(category)
 
@@ -407,11 +436,11 @@ class SynaraScannerEngine:
         srp_deduction = 0.0
 
         if level == "CRITICAL":
-            srp_deduction = MODULE_WEIGHTS.get(category, 0.0)  # Tam ağırlık
+            srp_deduction = self.MODULE_WEIGHTS.get(category, 0.0)  # Tam ağırlık
         elif level == "HIGH":
-            srp_deduction = MODULE_WEIGHTS.get(category, 0.0) * 0.7  # %70 ağırlık
+            srp_deduction = self.MODULE_WEIGHTS.get(category, 0.0) * 0.7  # %70 ağırlık
         elif level == "WARNING":
-            srp_deduction = MODULE_WEIGHTS.get(category, 0.0) * 0.3  # %30 ağırlık
+            srp_deduction = self.MODULE_WEIGHTS.get(category, 0.0) * 0.3  # %30 ağırlık
         else:
             srp_deduction = 0.0
 
@@ -429,28 +458,20 @@ class SynaraScannerEngine:
 
         # KRİTİK SRP V2.1: Modül başına bir kez düşüş kuralı
         # PORT_SCAN ve SYSTEM dışındaki modüller için normal kuralı uygula
-        if category in MODULE_WEIGHTS and category not in ["PORT_SCAN", "SYSTEM"]:
+        if category in self.MODULE_WEIGHTS and category not in ["PORT_SCAN", "SYSTEM"]:
+            # DÜZELTME 1: RCE_SSRF'den gelen bulguların 'SSRF_RCE' olarak gelme ihtimaline karşı tutarlı kategori adı kullanılıyor.
+            # Şu anki yapı, scanner.category'nin doğru olduğunu varsayar.
             if srp_deduction > 0.0 and self.module_deduction_tracker.get(category, False):
                 srp_deduction = 0.0  # Zaten düşülmüş, tekrar düşme
             elif srp_deduction > 0.0:
                 self.module_deduction_tracker[category] = True  # İlk kez düşüldü olarak işaretle
 
-        # PORT_SCAN için özel mantık (Hacker Odaklı): Her KRİTİK port için ayrı düşüş
-        elif category == "PORT_SCAN" and level == "CRITICAL":
-            port_number = None
-            try:
-                port_match = re.search(r'Port: (\d+)', message)
-                if port_match:
-                    port_number = int(port_match.group(1))
-            except Exception:
-                pass
-
-            if port_number and port_number in [21, 23, 3306] and port_number not in self.port_deduction_tracker:
-                # Her kritik port, PORT_SCAN ağırlığının 1/3'ü kadar ceza alır. (27.0 / 3 = 9.0)
-                srp_deduction = MODULE_WEIGHTS.get("PORT_SCAN", 0.0) / 3.0
-                self.port_deduction_tracker.add(port_number)
-            else:
-                srp_deduction = 0.0
+        # PORT_SCAN için özel mantık (Düzeltme 4: SRP değeri artık 5.0 olduğu için basitleştirildi)
+        elif category == "PORT_SCAN":
+            # Port taraması her zaman SRP'yi doğrudan kullanır (Zaten PortScanner'ın kendisi ayarlamıştır).
+            pass
+            # Eski karmaşık port logic'i kaldırıldı, sadece SRP skoruna güveniyoruz.
+            
 
         # FAZ 11 KRİTİK: Exploit önerisi ekle
         exploit_suggestion = ""
@@ -519,6 +540,10 @@ class SynaraScannerEngine:
         self.log("[MOTOR] Durdurma sinyali (STOP) alındı. İşlemler iptal ediliyor...", "WARNING")
         self.stop_requested = True
         self.proxy_manager.stop_updater()
+        
+        # FAZ 26: Thread havuzunu kapat
+        self.log("[PERFORMANS] Thread Pool Executor kapatılıyor...", "INFO")
+        self.thread_executor.shutdown(wait=False)
 
     async def _run_calibration_scan(self, session, url):
         """
@@ -590,6 +615,9 @@ class SynaraScannerEngine:
             if dynamic_threshold_s > 1.5:
                 # Gecikme = Eşiğin 1/3'ü (sunucuyu rahatlatmak için)
                 self.throttle_delay_ms = int((dynamic_threshold_s / 3) * 1000)
+                # DÜZELTME 2: Log filtresi 0.5s'den 2.0s'ye çıkarıldı
+                if dynamic_threshold_s > 6.0: # Eğer eşik 6 saniyeden büyükse, throttling 2 saniyeye sabitlensin
+                    self.throttle_delay_ms = 2000
                 self.log(f"[KALİBRASYON] Yüksek Dinamik Eşik tespit edildi. Dinamik Throttling (Yavaşlatma) {self.throttle_delay_ms:.0f} ms olarak ayarlandı.", "WARNING")
             else:
                 self.throttle_delay_ms = 0
@@ -599,6 +627,85 @@ class SynaraScannerEngine:
             self.calibration_latency_ms = 4000  # Hata durumunda varsayılan sabit değer
 
         return
+    
+    def _analyze_and_prioritize_main_scanners(self, final_url: str):
+        """
+        [FAZ 25 - NEURAL TAKTİK MÜDAHALE]
+        Keşif sonuçlarını (Aşama 2) analiz ederek Ana Tarama (Aşama 3) modüllerinin
+        çalışma sırasını dinamik olarak yeniden düzenler (Önceliklendirir).
+        """
+        self.log("\n--- FAZ 25: NEURAL TAKTİK MÜDAHALE BAŞLATILIYOR (Dinamik Önceliklendirme) ---", "HEADER")
+        
+        # 1. Keşif Bulgularını Topla (Hazır verilere dayanarak)
+        
+        # WAF Durumu (WAFDetector'dan)
+        waf_scanner = next((s for s in self._pre_scanners if s.category == 'WAF_DETECT'), None)
+        waf_detected = waf_scanner.waf_found if waf_scanner and hasattr(waf_scanner, 'waf_found') else False
+        
+        # Heuristic Reflection Context (HeuristicScanner'dan)
+        # NOT: HeuristicScanner AŞAMA 3'te çalıştığı için, buradaki mantıkta doğrudan kullanılamaz.
+        # Bu yüzden geçici olarak bu kısım yoksayılıyor ve sadece WAF/Parametre kullanılıyor.
+        heuristic_scanner = next((s for s in self._main_scanners if s.category == 'HEURISTIC'), None)
+        reflection_context = "None"
+        if heuristic_scanner and hasattr(heuristic_scanner, 'reflection_info'):
+            pass # Bu aşamada henüz çalışmadı.
+        
+        # Keşfedilen Parametre Sayısı (PreScanner'dan)
+        param_count = len(self.discovered_params)
+        
+        # 2. Öncelik Skorlarını Hesapla (Modül Adı: Skor)
+        priorities: Dict[str, float] = {}
+        
+        # Ana Tarama Modüllerini Geç
+        for scanner in self._main_scanners:
+            score = 0.0
+            category = scanner.category
+            
+            # --- Taktiksel Önceliklendirme Kuralları ---
+            
+            # KURAL 1: WAF Tespiti -> Smuggling ve Mantık Fuzzing'i Önceliklendir
+            if waf_detected:
+                if category == 'HTTP_SMUGGLING':
+                    score += 5.0 # WAF'ı atlatma potansiyeli yüksek
+                if category == 'BUSINESS_LOGIC':
+                    score += 3.0 # WAF'ın Business Logic'e odaklanma ihtimali düşük
+            
+            # KURAL 2: Giriş Noktası Varlığı -> Enjeksiyon Modüllerine Yönlendir
+            if param_count > 0:
+                if category in ['SQLI', 'XSS', 'LFI', 'RCE_SSRF']:
+                    score += 2.0 # Parametre varsa zafiyet aramak mantıklı
+                
+                # JSON/API Önceliği
+                if category == 'JSON_API':
+                    score += 4.0
+                
+            # KURAL 3: Kritik ve Temel Modüllere Statik Yüksek Puan (Hata ifşası, Exploit)
+            if category in ['CLOUD_EXPLOIT', 'REACT_EXPLOIT', 'INTERNAL_SCAN']:
+                score += 4.0 # Bu modüller her zaman yüksek kazanç potansiyeli taşır
+            
+            # KURAL 4: Düşük Etkili veya Dışsal Modüllere Düşük Puan
+            if category in ['HEADERS', 'FILES', 'HEURISTIC', 'PORT_SCAN']:
+                # Heuristic'in kendisi burada olduğu için -1.0 cezasını kaldırıyoruz, çünkü bu veriye ihtiyacımız var.
+                if category != 'HEURISTIC':
+                    score -= 1.0 # Keşif amaçlıdır, fuzzing sırasında öncelik düşebilir
+                
+            # KURAL 5: Mevcut SRP Ağırlığına Göre Dinamik Puanlama (Maksimum 5 puan ekler)
+            max_srp = self.MODULE_WEIGHTS.get(category, 0.0)
+            score += min(5.0, max_srp / 5.0) 
+
+            priorities[category] = score
+        
+        # 3. Modülleri Yeniden Sırala
+        # Modülleri skorlarına göre azalan sırada sırala (Yüksek skorlu olanlar öne alınır)
+        self._main_scanners.sort(key=lambda s: priorities.get(s.category, 0.0), reverse=True)
+        
+        self.log(f"[NEURAL TAKTİK] Ana Tarama modülleri {len(self._main_scanners)} modül bazında yeniden önceliklendirildi.", "SUCCESS")
+        
+        # Loglama: Yeni sırayı göster
+        new_order = [(s.category, priorities.get(s.category, 0.0)) for s in self._main_scanners]
+        self.log(f"[NEURAL TAKTİK] Yeni Çalışma Sırası (Modül: Skor): {[f'{cat}:{score:.1f}' for cat, score in new_order]}", "INFO")
+        
+        return new_order
 
     def _run_chaining_analysis(self):
         """
@@ -634,7 +741,7 @@ class SynaraScannerEngine:
 
         # Zincir 1: LFI/SSRF -> RCE/Files
         if lfi_or_ssrf_found and rce_or_file_found:
-            srp_deduction = MODULE_WEIGHTS.get("CHAINING", 0.0)  # Tam ağırlık
+            srp_deduction = self.MODULE_WEIGHTS.get("CHAINING", 0.0)  # Tam ağırlık
             self.add_result(
                 "CHAINING",
                 "CRITICAL",
@@ -646,7 +753,7 @@ class SynaraScannerEngine:
 
         # Zincir 3: Heuristic Reflection -> XSS
         if is_heuristic_reflected and xss_found_critical:
-             srp_deduction = MODULE_WEIGHTS.get("CHAINING", 0.0) * 0.7 # Yüksek risk
+             srp_deduction = self.MODULE_WEIGHTS.get("CHAINING", 0.0) * 0.7 # Yüksek risk
              self.add_result(
                 "CHAINING",
                 "HIGH",
@@ -658,7 +765,7 @@ class SynaraScannerEngine:
 
         # Zincir 2: JSON API -> XSS/SQLi
         if json_api_issue_found and xss_or_sqli_found:
-            srp_deduction = MODULE_WEIGHTS.get("CHAINING", 0.0) * 0.5
+            srp_deduction = self.MODULE_WEIGHTS.get("CHAINING", 0.0) * 0.5
             self.add_result(
                 "CHAINING",
                 "WARNING",
@@ -692,8 +799,8 @@ class SynaraScannerEngine:
         for res in self.results:
             if res['category'] == 'XSS' and res['level'] == 'CRITICAL':
 
-                original_srp_score = MODULE_WEIGHTS.get("XSS", 0.0)
-                new_srp_score = MODULE_WEIGHTS.get("XSS", 0.0) * 0.3
+                original_srp_score = self.MODULE_WEIGHTS.get("XSS", 0.0)
+                new_srp_score = self.MODULE_WEIGHTS.get("XSS", 0.0) * 0.3
 
                 res['level'] = 'WARNING'
                 res['cvss_score'] = new_srp_score
@@ -731,13 +838,23 @@ class SynaraScannerEngine:
             # Token yok, bekle
             wait_time = (1.0 - self.token_count) / MAX_QPS
             
-            # --- KRİTİK FP DÜZELTMESİ: SADECE CİDDİ GECİKME VARSA LOGLA (WAIT > 0.5s) ---
-            if wait_time > 0.5:
-                 self.log(f"[RATE_LIMIT] KRİTİK GECİKME: QPS Limiti aşıldı. {wait_time:.3f} saniye beklenecek (Konsol Filtresi Aktif).", "WARNING")
+            # FAZ 27 KRİTİK KONTROL: Çok uzun bekleme süresi var mı?
+            actual_wait_time = wait_time
+            if wait_time > MAX_THROTTLE_WAIT_TIME:
+                 self.log(f"[RATE_LIMIT | FAZ 27 LOCK] Modülün bekleme süresi ({wait_time:.3f}s) MAX_WAIT({MAX_THROTTLE_WAIT_TIME}s) aştı. Bekleme süresi {MAX_THROTTLE_WAIT_TIME}s ile sınırlanıyor.", "WARNING")
+                 actual_wait_time = MAX_THROTTLE_WAIT_TIME
             
-            await asyncio.sleep(wait_time)
-            self.token_count = 1.0  # Bekleme sonrası 1 token garantisi
-            self.last_request_time = time.time()  # Bekleme sonrası zamanı güncelle
+            # --- KRİTİK FP DÜZELTMESİ: SADECE CİDDİ GECİKME VARSA LOGLA (DÜZELTME 2: 2.0s yapıldı) ---
+            if actual_wait_time > 2.0:
+                 self.log(f"[RATE_LIMIT] KRİTİK GECİKME: QPS Limiti aşıldı. {actual_wait_time:.3f} saniye beklenecek (Konsol Filtresi Aktif).", "WARNING")
+            
+            await asyncio.sleep(actual_wait_time)
+            
+            # Beklemeden sonra, geçen süreyi hesapla ve token'ı tekrar güncelle (Refill the tokens based on the actual time spent waiting)
+            time_spent_waiting = time.time() - self.last_request_time # Toplam geçen süre (Jitter + Bekleme)
+            self.token_count += time_spent_waiting * MAX_QPS # Geri doldur
+            self.token_count = min(self.token_count, BURST) # Kapat
+            self.last_request_time = time.time() # Zamanı tekrar sıfırla
 
         self.token_count -= 1.0
 
@@ -746,7 +863,7 @@ class SynaraScannerEngine:
         Faz 10: Seçilen yapılandırma profiline göre tarayıcı modüllerini yükler.
         """
 
-        # KRİTİK DÜZELTME: GUI'nin hala FULL_SCAN arama ihtimaline karşın, 
+        # KRİTİK DÜZELTME: GUI'nin hala FULL_SCAN arama ihtimaline karşın,
         # profil adını manuel olarak BUG_BOUNTY_CORE'a ayarlıyoruz.
         if config_profile not in SCAN_PROFILES:
             # GUI'den gelen eski/bilinmeyen profil ise, KAZANÇ moduna yönlendir
@@ -771,6 +888,10 @@ class SynaraScannerEngine:
             self.dynamic_scanner = DynamicScanner(self.log)
         else:
             self.dynamic_scanner = None
+        
+        # FAZ 29 KRİTİK: Payload Generator'ı Neural Engine ile başlat
+        self.payload_generator = PayloadGenerator(self.neural_engine)
+        self.log("[CONFIG] Payload Generator, Neural Engine ile başlatıldı (FAZ 29).", "INFO")
 
         available_scanners = {
             'WAF_DETECT': WAFDetector(self.log, self.add_result, request_cb),
@@ -787,18 +908,20 @@ class SynaraScannerEngine:
             'IDOR': IDORScanner(self.log, self.add_result, request_cb),
             # KRİTİK DEĞİŞİKLİK: OOBListener'ı RCE_SSRFScanner'a enjekte et
             'RCE_SSRF': RCE_SSRFScanner(self.log, self.add_result, request_cb, oob_listener_instance=self.oob_listener),
-            'JSON_API': JSONAPIScanner(self.log, self.add_result, request_cb),
+            'JSON_API': JSONAPIScanner(self.log, self.add_result, request_cb), # DÜZELTME: JSONAPIScaner -> JSONAPIScanner
             'PORT_SCAN': PortScanner(self.log, self.add_result, request_cb),
             'NUCLEI': NucleiScanner(self.log, self.add_result, request_cb),
             'INTERNAL_SCAN': InternalScanner(self.log, self.add_result, request_cb),
             'JS_ENDPOINT': JSEndpointScanner(self.log, self.add_result, request_cb, endpoint_pattern=JS_ENDPOINT_PATTERN),
-            'GRAPHQL': GraphQLScanner(self.log, self.add_result, request_cb), 
-            'CLOUD_EXPLOIT': CloudExploitScanner(self.log, self.add_result, request_cb), 
+            'GRAPHQL': GraphQLScanner(self.log, self.add_result, request_cb),
+            'CLOUD_EXPLOIT': CloudExploitScanner(self.log, self.add_result, request_cb),
             'HTTP_SMUGGLING': HTTPSmugglingScanner(self.log, self.add_result, request_cb), # YENİ MODÜL: Smuggling
             'CLIENT_LOGIC': ClientLogicAnalyzer(self.log, self.add_result, request_cb), # YENİ MODÜL: ClientLogicAnalyzer
             'BUSINESS_LOGIC': BusinessLogicFuzzer(self.log, self.add_result, request_cb), # YENİ MODÜL: Logic Fuzzer
             # YENİ MODÜL: React2Shell Exploit
             'REACT_EXPLOIT': ReactExploitScanner(self.log, self.add_result, request_cb),
+            'OSINT': OSINTScanner(self.log, self.add_result, request_cb), # YENİ MODÜL: OSINT
+            'LEAKAGE': LeakageScanner(self.log, self.add_result, request_cb), # YENİ MODÜL: Leakage Scanner (FAZ 24)
         }
 
         self._pre_scanners = []
@@ -846,9 +969,19 @@ class SynaraScannerEngine:
                 
                 # --- PROJECT NEURAL (V23.0) ---
                 setattr(scanner_instance, 'neural_engine', self.neural_engine)
+                
+                # --- FAZ 29: PAYLOAD GENERATOR ENJEKSİYONU ---
+                # Tarayıcıların artık PayloadGenerator'ın yeni AI özelliklerini kullanmasını sağla
+                setattr(scanner_instance, 'payload_generator', self.payload_generator)
+
+
+                # FAZ 26: Thread Executor'ı sadece Senkron Modüllere enjekte et (PortScanner)
+                if module_name == 'PORT_SCAN':
+                    setattr(scanner_instance, 'thread_executor', self.thread_executor)
+                    self.log(f"[CONFIG] {module_name} Thread Executor'a bağlandı.", "INFO")
 
                 # SUBDOMAIN_TAKEOVER bir keşif modülüdür, pre_scanners'a ekle
-                if module_name in ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'JS_ENDPOINT', 'CLIENT_LOGIC']:  # CLIENT_LOGIC keşif modülü olarak eklendi
+                if module_name in ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'JS_ENDPOINT', 'CLIENT_LOGIC', 'OSINT', 'LEAKAGE']:  # YENİ: LEAKAGE de bir keşif/bilgi modülüdür
                     self._pre_scanners.append(scanner_instance)
                 else:
                     self._main_scanners.append(scanner_instance)
@@ -928,7 +1061,7 @@ class SynaraScannerEngine:
             ) as session:
 
                 # --- HELPER: SAFETY WRAPPER FOR SCANNERS ---
-                # Her bir tarayıcıyı belirli bir süre içinde bitmeye zorlayan, 
+                # Her bir tarayıcıyı belirli bir süre içinde bitmeye zorlayan,
                 # aksi halde iptal eden koruyucu kapsül.
                 async def _run_safe_scan(scanner_instance, scan_url, scan_session):
                     # BAŞLAMADAN ÖNCE STOP KONTROLÜ
@@ -945,13 +1078,17 @@ class SynaraScannerEngine:
                         )
                     except asyncio.TimeoutError:
                         self.log(f"[{scanner_instance.category}] ZAMAN AŞIMI SİGORTASI: Modül {MODULE_HARD_TIMEOUT} saniyedir yanıt vermiyor. İptal ediliyor.", "WARNING")
-                        # Callback'i manuel çağırarak progress bar'ın takılmasını önle
                         self._scanner_completed_callback()
                     except asyncio.CancelledError:
-                        self.log(f"[{scanner_instance.category}] GÖREV İPTAL EDİLDİ.", "WARNING")
+                        self.log(f"[{scanner_instance.category}] GÖREV İPTAL EDİLDİ (Async Cancelled).", "WARNING")
+                        self._scanner_completed_callback()
+                    except concurrent.futures.CancelledError: # FAZ 30 DÜZELTME
+                        self.log(f"[{scanner_instance.category}] GÖREV İPTAL EDİLDİ (Thread Cancelled).", "WARNING")
                         self._scanner_completed_callback()
                     except Exception as e:
-                        self.log(f"[{scanner_instance.category}] BEKLENMEDİK HATA (Wrapper): {e}", "CRITICAL")
+                        # FAZ 30 DÜZELTME: Genel hataları daha spesifik yakala
+                        error_type = type(e).__name__
+                        self.log(f"[{scanner_instance.category}] BEKLENMEDİK KRİTİK HATA ({error_type}): {e}", "CRITICAL")
                         self._scanner_completed_callback()
 
 
@@ -976,11 +1113,48 @@ class SynaraScannerEngine:
                 if self.stop_requested:
                     self.log("\n[STOP] Tarama kullanıcı tarafından durduruldu.", "WARNING")
                     return
+                
+                # --- FAZ 24 KRİTİK VERİ AKIŞI: Keşif verilerini Sızıntı Tarayıcıya Enjekte Et ---
+                leakage_scanner = next((s for s in self._pre_scanners if s.category == 'LEAKAGE'), None)
+                if leakage_scanner:
+                    # LeakageScanner bir keşif modülü olarak AŞAMA 2'ye taşındı.
+                    
+                    osint_emails = []
+                    discovery_subdomains = []
+                    # Basit ve güvenilir veri toplama simülasyonu
+                    base_domain = self._get_hostname(final_url)
+                    
+                    # 1. Alt Alan Adlarını Topla (DiscoveryOrchestrator'dan)
+                    subdomain_scanner = next((s for s in self._pre_scanners if s.category == 'SUBDOMAIN'), None)
+                    if subdomain_scanner and hasattr(subdomain_scanner, 'subdomains_found'):
+                        discovery_subdomains.extend(subdomain_scanner.subdomains_found)
+
+                    # Ana alan adını da hedef listesine ekle
+                    # DÜZELTME 7: Subdomain eşleşmesi için endswith mantığı eklendi.
+                    protected_domain_found = any(base_domain.endswith(p) for p in self.protected_domains)
+                    if not protected_domain_found:
+                        all_domains = list(set(discovery_subdomains + [base_domain]))
+                        setattr(leakage_scanner, 'target_domains', all_domains)
+
+                        # 2. Potansiyel E-postaları Simüle Et (Whois / Yaygın formatlar)
+                        simulated_emails = [
+                            f"admin@{base_domain}",
+                            f"support@{base_domain}",
+                            f"dev@{base_domain}"
+                        ]
+                        setattr(leakage_scanner, 'target_emails', simulated_emails)
+                        self.log(f"[LEAKAGE] Ana Tarayıcıya {len(leakage_scanner.target_emails)} adet e-posta ({base_domain} bazlı) ve {len(leakage_scanner.target_domains)} adet domain enjekte edildi.", "INFO")
+                    else:
+                        self.log(f"[LEAKAGE] KORUMA: {base_domain} korunan alanda. Sızıntı taraması atlandı.", "WARNING")
+
+                # --- FAZ 25 KRİTİK MÜDAHALE: Ana Tarayıcıları Önceliklendir ---
+                self._analyze_and_prioritize_main_scanners(final_url)
 
                 # --- AŞAMA 3: ANA TARAMA VE FUZZING ---
                 # Kalibrasyon sonuçları modüllere _load_scanners'da zaten atandı.
+                # NOT: Modül sırası artık dinamiktir.
                 if self._main_scanners:
-                    self.log("\n--- AŞAMA 3: FUZZING VE ANALİZ MODÜLLERİ BAŞLATILIYOR ---", "HEADER")
+                    self.log("\n--- AŞAMA 3: FUZZING VE ANALİZ MODÜLLERİ BAŞLATILIYOR (Taktiksel Sıra) ---", "HEADER")
                     
                     if not self.stop_requested:
                         main_scan_tasks = []
@@ -1015,7 +1189,7 @@ class SynaraScannerEngine:
 
         except Exception as e:
             error_message = f"Asenkron Tarama Hatası: {str(e)}"
-            srp_deduction = MODULE_WEIGHTS.get("SYSTEM", 10.0)
+            srp_deduction = self.MODULE_WEIGHTS.get("SYSTEM", 10.0)
             self.add_result("SYSTEM", "CRITICAL", error_message, srp_deduction)
             self._recalculate_score()
             self.log(error_message, "CRITICAL")
@@ -1069,7 +1243,8 @@ class SynaraScannerEngine:
                 hostname = hostname[4:]
 
             # Listeyi kontrol et
-            if any(domain in hostname for domain in self.protected_domains):
+            # DÜZELTME 7: Yanlış pozitif engellemeyi önlemek için endswith() kullanıldı (örn: evilgoogle.com engellenir)
+            if any(hostname.endswith(domain) for domain in self.protected_domains):
                 self.log(f"[GÜVENLİK] KRİTİK HATA: Hedef alan adı ({hostname}) koruma listesindedir. Tarama iptal edildi.", "CRITICAL")
                 # Hata durumunda bile tarayıcıları tamamlanmış sayıp GUI'yi temizleriz
                 self.progress_update(1)
@@ -1082,7 +1257,7 @@ class SynaraScannerEngine:
 
         self.score = 100.0
         self.results = []
-        self.module_deduction_tracker = {mod: False for mod in MODULE_WEIGHTS.keys()}
+        self.module_deduction_tracker = {mod: False for mod in self.MODULE_WEIGHTS.keys()}
         self.port_deduction_tracker = set()
         
         # STOP BAYRAĞINI SIFIRLA
@@ -1135,12 +1310,13 @@ class SynaraScannerEngine:
 
         except Exception as e:
             error_message = f"Kritik Motor Hatası: {str(e)}"
-            srp_deduction = MODULE_WEIGHTS.get("SYSTEM", 10.0)
+            srp_deduction = self.MODULE_WEIGHTS.get("SYSTEM", 10.0)
             self.add_result("SYSTEM", "CRITICAL", error_message, srp_deduction)
             self._recalculate_score()
             self.log(error_message, "CRITICAL")
 
         finally:
+            self.thread_executor.shutdown() # FAZ 26: Thread havuzunu kapat
             if self.dynamic_scanner:
                 self.dynamic_scanner.stop_dynamic_scan()
 

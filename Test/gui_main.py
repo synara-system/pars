@@ -3,7 +3,7 @@
 
 import customtkinter as ctk
 import tkinter as tk 
-from tkinter import messagebox, simpledialog # KRİTİK DÜZELTME: simpledialog eklendi
+from tkinter import messagebox # simpledialog kaldırıldı, çünkü eski versiyonda yoktu
 import threading
 import os
 import sys
@@ -11,7 +11,7 @@ import re
 import datetime
 import time
 import math # Animasyon hesaplamaları için
-import queue # YENİ: Log kuyruklama için eklendi (UI Donmasını Önler)
+# import queue # YENİ VERSİYONA AİT: KALDIRILDI
 from PIL import Image, ImageTk # YENİ: Resim ve İkon işlemleri için ImageTk eklendi
 
 # Global değişken: Gemini API anahtarını os.environ'dan kurtarır
@@ -202,38 +202,12 @@ class MestegApp(ctk.CTk):
         self.console = None 
         self.progress_lock = threading.Lock()
         
-        # --- YENİ: LOG QUEUE SİSTEMİ ---
-        # UI donmasını önlemek için logları kuyrukta biriktirip batch olarak işleyeceğiz.
-        self.log_queue = queue.Queue()
-        self._process_log_queue_id = None
-        # -------------------------------
+        # YENİ VERSİYONA AİT: KALDIRILDI
+        # self.log_queue = queue.Queue()
+        # self._process_log_queue_id = None
         
-        # --- MODÜL EŞLEŞTİRME HARİTASI (Engine Kodu -> GUI Kart Başlığı) ---
-        # Bu harita, engine.py'den gelen log başlıklarını (örn: SUBDOMAIN_TAKEOVER)
-        # gui_dashboard.py'de oluşturulan kart isimlerine (örn: SUBDOMAIN TAKEOVER) bağlar.
-        self.MODULE_MAPPING = {
-            'WAF_DETECT': 'WAF / FIREWALL',
-            'SUBDOMAIN': 'SUBDOMAIN RECON',
-            'SUBDOMAIN_TAKEOVER': 'SUBDOMAIN TAKEOVER', # EKSİK OLAN BUYDU
-            'PRE_SCAN': 'PARAM DISCOVERY',
-            'HEADERS': 'HTTP HEADERS',
-            'FILES': 'SENSITIVE FILES',
-            'PORT_SCAN': 'PORT SCANNER',
-            'HEURISTIC': 'HEURISTIC ENGINE',
-            'AUTH_BYPASS': 'AUTH BYPASS',
-            'LFI': 'LFI SCANNER',
-            'XSS': 'XSS SCANNER',
-            'SQLI': 'SQLi SCANNER',
-            'IDOR': 'IDOR SCANNER',
-            'RCE_SSRF': 'RCE / SSRF',
-            'JSON_API': 'API FUZZER',
-            'CLOUD_EXPLOIT': 'CLOUDSTORM',
-            'REACT_EXPLOIT': 'REACT EXPLOIT', # VE BU
-            'NUCLEI': 'NUCLEI ENGINE',
-            'INTERNAL_SCAN': 'SYSTEM CORE',
-            'JS_ENDPOINT': 'JS ENDPOINTS',
-            'GRAPHQL': 'GRAPHQL SECURITY'
-        }
+        # --- MODÜL EŞLEŞTİRME HARİTASI KALDIRILDI ---
+        # Basit versiyonda kullanılmaz.
         
         self.scanner_status_cards = {}
         self.module_status_frame = None 
@@ -259,12 +233,13 @@ class MestegApp(ctk.CTk):
         self.ai_analyst = AIAnalyst(logger=self.log_to_gui) 
 
         # [MARKALAMA] Pencere Başlığı
-        self.title("PARS | Pentest Autonomous Recon System")
+        self.title("PARS | Pentest Autonomous Recon System") # Başlık eski versiyona göre düzeltildi
         self.geometry("1300x800")
         self.configure(fg_color=self.COLOR_BG) 
         
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+        # BURADAN BAŞLIYOR: Motoru yerel modda başlat (API client yok)
         self.scanner = SynaraScannerEngine(
             logger_callback=self.log_to_gui, 
             progress_callback=self.log_progress_to_gui, 
@@ -291,8 +266,10 @@ class MestegApp(ctk.CTk):
         # Şimdi içerikleri doldur
         setup_dashboard_tab(self) 
         
+        # KRİTİK DÜZELTME: Butonu KİLİTLE ve perform_self_test'ten sonra AÇ
         if hasattr(self, 'btn_scan'):
              self.btn_scan.configure(state="disabled", text="SYSTEM CHECK...")
+             self.btn_scan.configure(command=self.start_scan_thread) # Komutun doğru ayarlandığından emin ol
              
         setup_reports_tab(self) 
         setup_ai_analyst_tab(self) 
@@ -302,10 +279,11 @@ class MestegApp(ctk.CTk):
         
         threading.Thread(target=self._check_for_updates, daemon=True).start()
         
-        self.after(1000, self.perform_self_test)
+        # YENİ: Log kuyruk işlemcisi kaldırıldı
+        # self._process_log_queue()
         
-        # YENİ: Log kuyruk işlemcisini başlat
-        self._process_log_queue()
+        # KRİTİK: Test akışını başlat (Butonu en sonunda enable yapacak)
+        self.after(100, self.perform_self_test) # 100ms sonra başlat
 
     def select_tab(self, tab_name):
         self.tab_dashboard.grid_forget()
@@ -357,11 +335,11 @@ class MestegApp(ctk.CTk):
         self.script_select_var.set("NO_AUTH") 
         self.script_select_menu.grid(row=0, column=5, padx=(0, 20), pady=15, sticky="w")
         
-        # KRİTİK: MANUEL EXPLOIT BUTONU EKLENİYOR
-        ctk.CTkButton(self.input_bar, text="MANUEL EXPLOIT", height=40, width=150, 
-                      font=ctk.CTkFont(weight="bold", size=14), fg_color=self.COLOR_PURPLE, 
-                      hover_color=self.COLOR_CYAN, text_color="white", corner_radius=6, 
-                      command=self.run_manual_exploit_dialog).grid(row=0, column=6, padx=(10, 20), pady=15)
+        # [MANUEL EXPLOIT BUTONU KALDIRILDI] - Eski versiyona sadık kalındı
+        # ctk.CTkButton(self.input_bar, text="MANUEL EXPLOIT", height=40, width=150, 
+        #               font=ctk.CTkFont(weight="bold", size=14), fg_color=self.COLOR_PURPLE, 
+        #               hover_color=self.COLOR_CYAN, text_color="white", corner_radius=6, 
+        #               command=self.run_manual_exploit_dialog).grid(row=0, column=6, padx=(10, 20), pady=15)
 
 
     def _resource_path(self, relative_path):
@@ -476,80 +454,19 @@ class MestegApp(ctk.CTk):
     
     def log_to_gui(self, message, level="INFO"):
         """
-        [OPTİMİZE EDİLDİ] Logları doğrudan UI'ya basmak yerine kuyruğa atar.
-        Bu sayede motor çok hızlı log üretse bile UI donmaz.
+        [ESKİ VERSİYON] Logları doğrudan UI thread'inde yazar (Daha az karmaşık).
         """
         if self.console is None:
             return
-        # Mesajı kuyruğa ekle (Thread-safe)
-        self.log_queue.put((message, level))
+        self.after(0, lambda: self.console.write_log(message, level))
         
-    def _process_log_queue(self):
-        """
-        [YENİ] Kuyruktaki logları periyodik olarak UI'ya yazar ve MODÜL DURUMLARINI GÜNCELLER.
-        """
-        if not hasattr(self, 'log_queue'):
-            return
+    # YENİ VERSİYONA AİT: KALDIRILDI
+    # def _process_log_queue(self):
+    #     pass
 
-        MAX_LOGS_PER_FRAME = 25  # Tek seferde işlenecek maksimum log sayısı
-        processed = 0
-        
-        while not self.log_queue.empty() and processed < MAX_LOGS_PER_FRAME:
-            try:
-                msg, level = self.log_queue.get_nowait()
-                if self.console:
-                    self.console.write_log(msg, level)
-                
-                # --- YENİ: MODÜL DURUMU GÜNCELLEME ---
-                # Log mesajından hangi modülün çalıştığını tespit edip kartı yakalım.
-                self._update_module_status_from_log(msg)
-                
-                processed += 1
-            except queue.Empty:
-                break
-        
-        # 50ms sonra tekrar kontrol et (Saniyede 20 kez çalışır)
-        self._process_log_queue_id = self.after(50, self._process_log_queue)
-
-    def _update_module_status_from_log(self, msg):
-        """
-        [YENİ] Log mesajındaki [MODÜL_ADI] etiketini okur ve ilgili UI kartını aktif eder.
-        """
-        if not msg.startswith("["): return
-        
-        try:
-            # "[MODÜL] Mesaj..." formatını yakala
-            end_bracket = msg.find("]")
-            if end_bracket == -1: return
-            
-            engine_cat = msg[1:end_bracket].strip() # örn: SUBDOMAIN_TAKEOVER
-            
-            # Eğer map'te varsa (örn: SUBDOMAIN_TAKEOVER -> SUBDOMAIN TAKEOVER)
-            # Eğer map'te yoksa, direkt ismi kullanmayı dene
-            gui_key = self.MODULE_MAPPING.get(engine_cat, engine_cat)
-            
-            if gui_key in self.scanner_status_cards:
-                card = self.scanner_status_cards[gui_key]
-                
-                # Kartı "ÇALIŞIYOR" moduna al (Cyan)
-                if card['dot'].cget("text_color") != self.COLOR_CYAN: # Sürekli update'i engelle
-                    card['dot'].configure(text="●", text_color=self.COLOR_CYAN)
-                    card['frame'].configure(border_color=self.COLOR_CYAN)
-                    
-                    # 1 saniye sonra eski haline (Yeşil/Online) döndür (Blink Efekti)
-                    # Not: Bu basit bir animasyon, gerçek uygulamada "modül bitti" event'i daha iyi olurdu
-                    # ama log tabanlı sistemde bu yeterli bir görsel geri bildirim sağlar.
-                    def reset_color():
-                        if not self.is_scanning: return # Tarama bittiyse elleme
-                        try:
-                            card['dot'].configure(text="●", text_color=self.COLOR_SUCCESS)
-                            card['frame'].configure(border_color=self.COLOR_TERMINAL_FRAME)
-                        except: pass
-                        
-                    self.after(1000, reset_color)
-                    
-        except Exception:
-            pass
+    # YENİ VERSİYONA AİT: KALDIRILDI
+    # def _update_module_status_from_log(self, msg):
+    #     pass
 
     def append_to_ai_console(self, message: str, speaker: str):
         if self.ai_console:
@@ -576,20 +493,7 @@ class MestegApp(ctk.CTk):
     def _initialize_status_cards(self):
         initialize_cards(self) 
         
-        # --- EKSİK KART KONTROLÜ VE EKLENTİSİ ---
-        # gui_dashboard.py içindeki initialize_cards listesinde olmayanları buraya ekle
-        # Bu, subdomain takeover ve react exploit'in neden gri kaldığını çözer.
-        
-        missing_keys = ["SUBDOMAIN TAKEOVER", "REACT EXPLOIT"]
-        # Ancak initialize_cards'ın ürettiği frame'e erişmemiz lazım.
-        # initialize_cards(self) genellikle self.module_status_frame oluşturur.
-        
-        # Not: Eğer gui_dashboard.py kartları oluşturmuyorsa, burada manuel oluşturmak zordur.
-        # Ama eğer kartlar EKRANDA VARSA (görseldeki gibi) ama status_cards dict'inde yoksa:
-        # Bu durumda widget isimlerinden bulmamız gerekir ki bu çok kompleks.
-        
-        # Varsayım: Kartlar initialize_cards tarafından oluşturuluyor ve dictionary'e ekleniyor.
-        # Sadece log mapping eksikti (bunu _update_module_status_from_log ile çözdük).
+        # Basit versiyonda Mapping gerekmez, doğrudan kartlar yüklenir.
         
         self.log_to_gui("Modules reset. Matrix loaded.", "INFO")
         self.risk_counts = {"CRITICAL": 0, "HIGH": 0, "WARNING": 0, "INFO": 0}
@@ -625,6 +529,7 @@ class MestegApp(ctk.CTk):
             self.after(0, lambda: self.loader_animation.update_progress(ratio, phase_text))
 
     def monitor_progress(self):
+        # Basit versiyonda log kuyruğu olmadığı için, ilerleme kontrolünü doğrudan yapabiliriz.
         if not self.is_scanning:
             return
 
@@ -666,80 +571,9 @@ class MestegApp(ctk.CTk):
             self.terminal_outer_frame.configure(border_color=new_color)
         self.glow_animation_id = self.after(100, self.animate_terminal_glow)
         
-    def run_manual_exploit_dialog(self):
-        """
-        [YENİ METOT - V18.0] Akıllı Exploit Menüsü: Tespit edilen zafiyetleri listeler.
-        """
-        if not self.scanner or not self.scanner.target_url:
-            messagebox.showerror("Hata", "Taranacak hedef yok. Lütfen tarama başlatın.")
-            return
-
-        # 1. Konsoldan toplanan exploit önerilerini al (ExploitManager simülasyonu değil, logdan okuma)
-        # Not: RichConsole zaten exploit_data_map içinde bunları saklıyor.
-        # GUI üzerinden konsol objesine erişelim.
-        if not hasattr(self, 'console') or not self.console:
-            messagebox.showinfo("Bilgi", "Konsol verisi bulunamadı.")
-            return
-            
-        detected_exploits = self.console.exploit_data_map
-        
-        # Eğer tespit edilen bir şey yoksa, varsayılan bir diyalog göster (Eski yöntem)
-        if not detected_exploits:
-            type_dialog = ctk.CTkInputDialog(text="Otomatik tespit bulunamadı.\nExploit Tipini Girin (RCE, XSS...):", title="MANUEL GİRİŞ")
-            user_type = type_dialog.get_input()
-            if not user_type: return
-            
-            payload_dialog = ctk.CTkInputDialog(text="Payload:", title="MANUEL GİRİŞ")
-            user_data = payload_dialog.get_input()
-            if not user_data: return
-            
-            threading.Thread(target=self.scanner.run_manual_exploit, 
-                             args=(user_type.strip().upper(), user_data.strip()), 
-                             daemon=True).start()
-            return
-
-        # 2. Seçim Penceresi Oluştur (Toplevel)
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("TESPİT EDİLEN FIRSATLAR")
-        dialog.geometry("500x400")
-        dialog.configure(fg_color=self.COLOR_BG)
-        dialog.grab_set() # Ana pencereyi blokla
-        
-        ctk.CTkLabel(dialog, text="HEDEF SİSTEMDE BULUNAN FIRSATLAR", 
-                     font=ctk.CTkFont(family="Orbitron", size=16, weight="bold"), 
-                     text_color=self.COLOR_ACCENT).pack(pady=20)
-        
-        scroll_frame = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
-        scroll_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-        
-        # 3. Her exploit için bir kart/buton oluştur
-        for exploit_id, exploit_data in detected_exploits.items():
-            # Tipi tahmin et
-            etype = "GENERIC"
-            if "SQLi" in exploit_data: etype = "SQLi"
-            elif "LFI" in exploit_data: etype = "LFI"
-            elif "RCE" in exploit_data or "echo" in exploit_data: etype = "RCE" # RCE tanıması eklendi
-            elif "XSS" in exploit_data: etype = "XSS"
-            # --- YENİ: React2Shell Kontrolü Eklendi ---
-            elif "React" in exploit_data or "NEXTJS" in exploit_data or "REACT" in exploit_data: 
-                etype = "REACT_RCE"
-            
-            card = ctk.CTkFrame(scroll_frame, fg_color=self.COLOR_SIDEBAR, border_width=1, border_color=self.COLOR_TERMINAL_FRAME)
-            card.pack(fill="x", pady=5)
-            
-            ctk.CTkLabel(card, text=f"[{etype}]", font=ctk.CTkFont(weight="bold"), text_color=self.COLOR_CYAN).pack(side="left", padx=10)
-            ctk.CTkLabel(card, text=exploit_data[:40]+"...", text_color="white").pack(side="left")
-            
-            # Çalıştır Butonu
-            def _run(t=etype, d=exploit_data):
-                dialog.destroy()
-                threading.Thread(target=self.scanner.run_manual_exploit, args=(t, d), daemon=True).start()
-                self.log_to_gui(f"[CMD] Seçilen Exploit '{t}' başlatılıyor...", "CMD")
-
-            ctk.CTkButton(card, text="ÇALIŞTIR", width=80, fg_color=self.COLOR_ACCENT, hover_color=self.COLOR_ERROR, command=_run).pack(side="right", padx=10, pady=10)
-            
-        ctk.CTkButton(dialog, text="İPTAL", fg_color="transparent", border_width=1, border_color="white", command=dialog.destroy).pack(pady=10)
-
+    # run_manual_exploit_dialog metodu eski versiyonda yok, kaldırıldı.
+    # def run_manual_exploit_dialog(self):
+    #     pass
 
     def start_scan_thread(self):
         url = self.entry_url.get().strip()
@@ -791,6 +625,7 @@ class MestegApp(ctk.CTk):
         # [YENİ] Progress Monitörü başlat
         self.monitor_progress()
 
+        # KRİTİK: Doğrudan Engine'i çağırıyoruz (API Client yok)
         threading.Thread(target=self.run_scan, args=(url, selected_profile,), daemon=True).start()
 
     def run_scan(self, url, profile):
@@ -872,11 +707,16 @@ class MestegApp(ctk.CTk):
         # KRİTİK DÜZELTMESİ: Global API anahtarını geçir
         global _GEMINI_API_KEY
         score = self.scanner.score # Skoru doğrudan motordan çek
-        ai_response = self.ai_analyst.analyze_results(self.scanner.results, score, api_key=_GEMINI_API_KEY)
         
-        # KRİTİK DÜZELTME: self.scanner.score kullan
-        self.append_to_ai_console(f"--- MANUAL ANALYSIS: {self.scanner.target_url} ---\nScore: {score:.1f}/100\n{ai_response}", "AI_INFO")
+        # KRİTİK DÜZELTMESİ: API çağrısı Thread içinde yapılmalı (GUI'yi bloklamamak için)
+        def _analyze_task():
+             # KRİTİK: Burada AI Analizini senkron çağırıyoruz (requests kullanıyor)
+             ai_response = self.ai_analyst.analyze_results(self.scanner.results, score, api_key=_GEMINI_API_KEY)
+             
+             # Sonucu GUI thread'ine geri gönder
+             self.after(0, lambda: self.append_to_ai_console(f"--- MANUAL ANALYSIS: {self.scanner.target_url} ---\nScore: {score:.1f}/100\n{ai_response}", "AI_INFO"))
 
+        threading.Thread(target=_analyze_task, daemon=True).start()
 
     def delete_report(self, file_path):
         self.log_to_gui(f"[REPORTS] Deleting report: {os.path.basename(file_path)}", "INFO")
@@ -946,22 +786,34 @@ class MestegApp(ctk.CTk):
         self.btn_scan.configure(state="disabled")
         self.entry_ai_chat.configure(state="disabled")
 
-        # KRİTİK DÜZELTMESİ: Global API anahtarını geçir
-        ai_response = self.ai_analyst.analyze_results(
-             results=[{"category": "CHAT", "level": "INFO", "cvss_score": 0.0, "message": chat_prompt}], 
-             final_score=self.scanner.score,
-             api_key=_GEMINI_API_KEY
-        )
-        
-        self.append_to_ai_console(ai_response, "AI")
-        
-        self.btn_scan.configure(state="normal")
-        self.entry_ai_chat.configure(state="normal")
+        # KRİTİK DÜZELTMESİ: API çağrısı Thread içinde yapılmalı
+        def _chat_task():
+            # KRİTİK: Burada AI Analizini senkron çağırıyoruz (requests kullanıyor)
+            ai_response = self.ai_analyst.analyze_results(
+                 results=[{"category": "CHAT", "level": "INFO", "cvss_score": 0.0, "message": chat_prompt}], 
+                 final_score=self.scanner.score,
+                 api_key=_GEMINI_API_KEY
+            )
+            
+            self.after(0, lambda: self._complete_chat_gui(ai_response))
+            
+        threading.Thread(target=_chat_task, daemon=True).start()
+
+    def _complete_chat_gui(self, ai_response):
+         # GUI thread'inde çalışır
+         self.append_to_ai_console(ai_response, "AI")
+         self.btn_scan.configure(state="normal")
+         self.entry_ai_chat.configure(state="normal")
         
     def perform_self_test(self):
         self.log_to_gui("Initiating Module Diagnostics...", "HEADER")
         
         def _test_sequence():
+            # initialize_cards'ın çağrılması için GUI'nin hazır olması beklenir.
+            if not self.scanner_status_cards:
+                self.after(50, self._initialize_status_cards)
+                time.sleep(0.1)
+
             if not self.scanner_status_cards:
                 return
 
@@ -980,9 +832,13 @@ class MestegApp(ctk.CTk):
                 
                 self.log_to_gui(f"Module loaded: {key} ... [OK]", "INFO")
                 
-            # YENİ: Test bitti, butonu aktif et
+            # KRİTİK DÜZELTME: Test bittiğinde butonu aktif et
             if hasattr(self, 'btn_scan'):
-                self.after(0, lambda: self.btn_scan.configure(state="normal", text="INITIALIZE SCAN"))
+                self.after(0, lambda: self.btn_scan.configure(
+                    state="normal", 
+                    text="INITIALIZE SCAN",
+                    fg_color=self.COLOR_ACCENT # Rengi geri yükle
+                ))
 
             self.log_to_gui("All modules operational. Systems Nominal.", "SUCCESS")
 

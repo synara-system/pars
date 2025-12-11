@@ -1,25 +1,25 @@
 # path: core/scanners/json_api_scanner.py
 
+import asyncio
 import aiohttp
 import aiohttp.client_exceptions
-import asyncio
 import json
+import re
 from typing import Callable, List, Dict, Any, Optional, Set
-from urllib.parse import urlparse, parse_qs, urlencode, urljoin
+from urllib.parse import urlparse, urlunparse, urlencode, urljoin
 
 from core.scanners.base_scanner import BaseScanner
-from core.payload_generator import PayloadGenerator
-
+from core.payload_generator import PayloadGenerator # Faz 29/35 Enjeksiyonu için
+from core.data_simulator import DataSimulator # KRİTİK DÜZELTME: DataSimulator eklendi
 
 class JSONAPIScanner(BaseScanner):
     """
-    POST/PUT gövdeleri için JSON formatında payload'lar oluşturarak
-    XSS / SQLi benzeri zafiyetleri test eder.
-
-    ÖNEMLİ GÜNCELLEME:
-    - Baseline (kontrol) isteği başarısız veya HTML dönerse → JSON API taraması tamamen atlanır.
-    - Fuzzing isteklerindeki timeout'lar log spam yapmaz, sessizce geçilir.
-    - V3.0 Path Fuzzing: Parametre bulunamazsa yaygın API yollarını dener.
+    [FAZ 8/35] JSON/REST API Zafiyet Keşfi.
+    
+    Yöntemler:
+    - Hata mesajı ifşası (API Endpoint'leri)
+    - HTTP Metot Manipülasyonu (GET/POST/PUT)
+    - XSS / SQLi Fuzzing (AI Destekli Payloadlar)
     """
 
     # Varsayılan API endpoint (boş ise hedef URL'ye POST atar)
@@ -46,21 +46,31 @@ class JSONAPIScanner(BaseScanner):
 
     def __init__(self, logger, results_callback, request_callback: Callable[[], None]):
         super().__init__(logger, results_callback, request_callback)
-        self.payload_generator = PayloadGenerator(logger)
+        # KRİTİK DÜZELTME: Payload Generator'ı direkt oluşturmak yerine Engine'den enjekte edilmesini bekle
+        self.payload_generator: Optional[PayloadGenerator] = None 
+        # Engine'den enjekte edilecek
+        self._throttled_request: Callable = getattr(self, '_throttled_request', self._default_throttled_request)
+        # Keşfedilen Parametreler (Engine'den enjekte edilecek)
+        self.discovered_params: Set[str] = set()
+
 
     async def scan(self, url: str, session: aiohttp.ClientSession, completed_callback: Callable[[], None]):
         """
         JSON API tarama mantığını uygular (Asenkron).
         """
+        if self.payload_generator is None:
+            self.log(f"[{self.category}] Payload Generator enjekte edilmedi. Tarama atlanıyor.", "CRITICAL")
+            completed_callback()
+            return
+            
         try:
-            # 1) Payload listelerini hazırla
-            base_xss_payloads = self.payload_generator.generate_xss_payloads()
-            base_sqli_payloads = self.payload_generator.generate_sqli_payloads()
+            # 1) Payload listelerini hazırla (KRİTİK DÜZELTME: await eklendi)
+            base_xss_payloads = await self.payload_generator.generate_xss_payloads()
+            base_sqli_payloads = await self.payload_generator.generate_sqli_payloads()
             all_payloads = list(set(base_xss_payloads + base_sqli_payloads))
-
+            
             # Keşif modüllerinden gelen tüm API yolları veya parametreleri
-            # KRİTİK DÜZELTME: Gelen veriyi Set tipine dönüştürüyoruz.
-            discovered_items: Set[str] = set(getattr(self, "discovered_params", set()))
+            discovered_items: Set[str] = getattr(self, "discovered_params", set())
 
             # ----------------------------------------------------
             # V5.1 KRİTİK DEĞİŞİKLİK: Hedeflenecek Yolları Belirle
@@ -68,13 +78,16 @@ class JSONAPIScanner(BaseScanner):
             target_endpoints: List[str] = []
             
             # 1. Statik Path Fuzzing: Parametre bulunamazsa yedek olarak kullanılır (Path Fuzzing listesi)
-            if not discovered_items or all(not item.startswith('/') for item in discovered_items):
-                 self.log(f"[{self.category}] JS/Pre-Scan'den dinamik yol gelmedi. Statik Path Fuzzing ({len(self.COMMON_API_PATHS)} yol) başlatılıyor...", "WARNING")
-                 target_endpoints.extend(self.COMMON_API_PATHS)
+            # Eğer keşfedilenler arasında hiç path yoksa VEYA keşif hiç bir şey dönmediyse, COMMONS'u kullan
+            has_paths = any(item.startswith('/') for item in discovered_items)
+            
+            if not discovered_items or not has_paths:
+                self.log(f"[{self.category}] JS/Pre-Scan'den dinamik yol gelmedi. Statik Path Fuzzing ({len(self.COMMON_API_PATHS)} yol) başlatılıyor...", "WARNING")
+                target_endpoints.extend(self.COMMON_API_PATHS)
             else:
-                 # 2. Dinamik Keşif Yolları: JS_ENDPOINT'ten gelen ve '/' ile başlayan yollar (en kritik veri)
-                 self.log(f"[{self.category}] JS Keşfi başarılı. {len(discovered_items)} adet yol/parametre üzerinden fuzzing başlatılıyor.", "INFO")
-                 target_endpoints.extend([item for item in discovered_items if item.startswith('/')])
+                self.log(f"[{self.category}] JS Keşfi başarılı. {len(discovered_items)} adet yol/parametre üzerinden fuzzing başlatılıyor.", "INFO")
+                # 2. Dinamik Keşif Yolları: JS_ENDPOINT'ten gelen ve '/' ile başlayan yollar (en kritik veri)
+                target_endpoints.extend([item for item in discovered_items if item.startswith('/')])
             
             
             if not target_endpoints:
@@ -88,24 +101,19 @@ class JSONAPIScanner(BaseScanner):
             
             tasks: List[asyncio.Task] = []
             
-            # Test edilecek DUMMY parametreler (Çünkü sadece yol bulduk, parametre adı bulamadık)
+            # Test edilecek DUMMY parametreler (Engine, keşfedilen parametreleri enjekte etmiyorsa kullanılır)
             dummy_params = {"data": "api_test_data", "id": 12345}
+            
+            # Fuzz yapılacak parametrelerin genel kümesi (Discovered params + Dummy)
+            all_fuzz_params = {item for item in discovered_items if not item.startswith('/')} | set(dummy_params.keys())
+
 
             # Her bir endpoint'e Fuzzing uygula
             for endpoint in target_endpoints:
                 
-                # A) Bu yolda fuzzing yapılması gereken parametreleri belirle
-                params_to_fuzz: Set[str] = set()
-                
-                # Eğer keşfedilenler arasında path olmayan, sadece parametre isimleri varsa, onları kullan
-                if not endpoint.startswith('/'):
-                    params_to_fuzz.add(endpoint) # PRE_SCAN'in bulduğu parametreler
-                else:
-                    params_to_fuzz.update(dummy_params.keys()) # Sadece yol bulduysak, dummy parametreleri kullan
-
-                # B) Baseline (kontrol) isteği
+                # A) Baseline (kontrol) isteği için payload hazırla
                 baseline_payload: Dict[str, Any] = {}
-                for p_name in params_to_fuzz:
+                for p_name in all_fuzz_params:
                     baseline_payload[p_name] = self._guess_default_value(p_name)
                 
                 original_content, original_status_code = await self._fetch_json_api(
@@ -124,7 +132,7 @@ class JSONAPIScanner(BaseScanner):
                     continue
                 
                 # C) Fuzzing görevlerini oluştur
-                for param in params_to_fuzz:
+                for param in all_fuzz_params:
                     for payload in all_payloads:
                         tasks.append(
                             self._test_json_fuzzing(
@@ -142,10 +150,11 @@ class JSONAPIScanner(BaseScanner):
             if total_tasks > 0:
                 self.log(f"[{self.category}] Toplam {total_tasks} JSON API kombinasyonu keşfedilen yollarda taranacak.", "SUCCESS")
             
-                await asyncio.gather(*tasks)
+                await asyncio.gather(*tasks, return_exceptions=True)
 
         except Exception as e:
             error_message = f"Kritik Hata: {type(e).__name__} ({str(e)})"
+            # KRİTİK DÜZELTME: Doğrudan SRP hesaplaması BaseScanner'a taşındığı için bu güvenli hale gelir
             score_deduction = self._calculate_score_deduction("CRITICAL")
             self.add_result(self.category, "CRITICAL", error_message, score_deduction)
             self.log(f"[{self.category}] {error_message}", "CRITICAL")
@@ -185,52 +194,45 @@ class JSONAPIScanner(BaseScanner):
     ):
         """
         URL'ye POST isteği gönderir ve içeriği/durum kodunu döndürür.
-        Baseline isteği için timeout loglanır, fuzzing için sessiz geçilir.
         """
 
-        # YENİ: Dinamik path'i kullan
         target_path = path_suffix if path_suffix is not None else self.DEFAULT_API_ENDPOINT
         api_url = urljoin(url, target_path)
 
-        # Dinamik timeout: kalibrasyona göre ama asla 10 saniyenin altına düşmesin, 20'nin üstüne çıkmasın
         base_timeout_s = getattr(self, "calibration_latency_ms", 4000) / 1000.0
         total_timeout_s = max(10.0, min(20.0, base_timeout_s * 5.0))
 
         try:
-            # Jitter / Token-Bucket entegrasyonu (varsa)
             if hasattr(self, '_apply_jitter_and_throttle'):
                 await self._apply_jitter_and_throttle()
 
             self.request_callback()
 
-            async with session.post(
-                api_url,
+            # KRİTİK DÜZELTME: self._throttled_request çağrısı artık engine'den geliyor
+            response, duration = await self._throttled_request(
+                session, 
+                "POST", # JSON API'ler genellikle POST/PUT kullanır
+                api_url, 
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=total_timeout_s),
-            ) as res:
-                content = await res.text()
-                return content, res.status
+                allow_redirects=False,
+                timeout=total_timeout_s
+            )
+            
+            if response is None:
+                if log_on_timeout:
+                    self.log(
+                        f"[{self.category}] API Timeout/Connection Hatası: {api_url}",
+                        "WARNING",
+                    )
+                return None, None
 
-        except asyncio.TimeoutError:
-            if log_on_timeout:
-                self.log(
-                    f"[{self.category}] API Timeout: {total_timeout_s:.1f}s sınırı aşıldı.",
-                    "WARNING",
-                )
-            return None, None
-
-        except aiohttp.client_exceptions.ClientConnectorError:
-            if log_on_timeout:
-                self.log(
-                    f"[{self.category}] API İstek Hatası: ClientConnectorError (Bağlantı kurulamadı)",
-                    "WARNING",
-                )
-            return None, None
+            content = await response.text()
+            return content, response.status
 
         except Exception as e:
             if log_on_timeout:
                 self.log(
-                    f"[{self.category}] API İstek Hatası: {type(e).__name__}",
+                    f"[{self.category}] API İstek Hatası ({api_url}): {type(e).__name__}",
                     "WARNING",
                 )
             return None, None
@@ -247,38 +249,42 @@ class JSONAPIScanner(BaseScanner):
     ):
         """
         Verilen parametreye payload enjekte ederek API'yi test eder.
-        Fuzzing çağrılarında timeout'lar loglanmaz, sadece sessizce atlanır.
         """
 
         test_payload_body: Dict[str, Any] = {}
 
-        for p in self.discovered_params:
-            if p == param:
-                test_payload_body[p] = payload
-            else:
-                test_payload_body[p] = self._guess_default_value(p)
+        # Temel payload'u oluştur (tüm parametreleri doldur)
+        discovered_params = getattr(self, "discovered_params", set())
+        for p in discovered_params:
+            if p.startswith('/'): continue # Pathleri atla
+            test_payload_body[p] = self._guess_default_value(p)
+        
+        # Hedef parametreye payload'u enjekte et
+        test_payload_body[param] = payload
+
 
         test_content, test_status_code = await self._fetch_json_api(
             url,
             session,
             payload=test_payload_body,
-            log_on_timeout=False,  # Fuzzing timeout'ları spam yapmasın
-            path_suffix=target_endpoint # Yeni endpoint'i geçir
+            log_on_timeout=False, 
+            path_suffix=target_endpoint
         )
 
         if test_content is None:
             return
 
         # 500 → Doğrudan kritik backend hatası
-        if test_status_code == 500:
-            score_deduction = self._calculate_score_deduction("CRITICAL")
-            self.add_result(
-                self.category,
-                "CRITICAL",
-                f"KRİTİK: JSON Fuzzing hatası! Parametre '{param}' payload'ı sunucu tarafında 500 hatası tetikledi. Payload: {payload[:20]}...",
-                score_deduction,
-            )
-            return
+        if test_status_code == 500 or test_status_code == 400:
+            if "sql syntax" in test_content.lower() or "java.lang.exception" in test_content.lower():
+                score_deduction = self._calculate_score_deduction("CRITICAL")
+                self.add_result(
+                    self.category,
+                    "CRITICAL",
+                    f"KRİTİK: JSON Fuzzing hatası! Parametre '{param}' payload'ı sunucu tarafında {test_status_code} hatası tetikledi. Payload: {payload[:20]}...",
+                    score_deduction,
+                )
+                return
 
         len_diff = abs(len(test_content) - len(original_content))
 
@@ -291,3 +297,19 @@ class JSONAPIScanner(BaseScanner):
                 score_deduction,
             )
             return
+            
+    def _calculate_score_deduction(self, level: str) -> float:
+        """SRP puanını hesaplar (Engine'deki mantığın bir kopyası)."""
+        # KRİTİK DÜZELTME: self.engine_instance üzerinden erişim garanti edilmeli
+        weight = getattr(self.engine_instance, 'MODULE_WEIGHTS', {}).get(self.category, 0.0) 
+        
+        if level == "CRITICAL":
+            return weight
+        elif level == "HIGH":
+            return weight * 0.7
+        else: # WARNING
+            return weight * 0.3
+            
+    async def _default_throttled_request(self, session, method, url, **kwargs):
+        """Engine'den gelmezse kullanılan geçici metot."""
+        return await session.request(method, url, **kwargs), 0

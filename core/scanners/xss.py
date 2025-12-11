@@ -1,25 +1,30 @@
 # path: core/scanners/xss.py
 
-import aiohttp
-import aiohttp.client_exceptions
 import asyncio
-from typing import Callable, List, Dict, Any, Optional
+import aiohttp
+import aiohttp.client_exceptions # Timeout hatası için kullanılıyor
+import re
+from typing import Callable, List, Dict, Any, Optional, Set
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 import random
-import re
+from time import time # KRİTİK DÜZELTME: time() için eklendi
 
 from core.scanners.base_scanner import BaseScanner
-from core.payload_generator import PayloadGenerator
-
+from core.payload_generator import PayloadGenerator # Faz 29
+from core.dynamic_scanner import DynamicScanner # Headless browser
+from core.data_simulator import DataSimulator # Random string generation için
 
 class XSSScanner(BaseScanner):
     """
-    Gelişmiş XSS Tarayıcı (V17.1 OFFENSIVE UPDATE)
-    - FP Kalkanı Gevşetildi: Kontrol payload'u yansısa bile tarama DEVAM EDER.
-    - Daha fazla payload denemesi.
-    - Circuit Breaker hala aktif (DoS koruması için).
+    [FAZ 3/29/35] Cross-Site Scripting (XSS) Tarayıcısı.
+    
+    Yöntemler:
+    - Yansıtılmış (Reflected) XSS
+    - DOM XSS (DynamicScanner gerektirir)
     """
-
+    
+    PER_MODULE_LIMIT = 10
+    
     # Normalde yanıtta bulunmaması gereken benzersiz payload
     CONTROL_PAYLOAD = "Synara_False_Positive_Control_123456789"
 
@@ -34,7 +39,7 @@ class XSSScanner(BaseScanner):
     MAX_POST_PAYLOADS = 10
 
     # Circuit Breaker Ayarları
-    MAX_CONSECUTIVE_TIMEOUTS = 5  # Üst üste kaç timeout'tan sonra sigorta atar?
+    MAX_CONSECUTIVE_TIMEOUTS = 5 
     
     # YENİ FAZ: Engine'den gelen Heuristic Context bilgisi için placeholder
     reflection_context_type: Optional[str]
@@ -47,15 +52,20 @@ class XSSScanner(BaseScanner):
         dynamic_scanner_instance=None,
     ):
         super().__init__(logger, results_callback, request_callback)
-        self.payload_generator = PayloadGenerator(logger)
+        # self.payload_generator = PayloadGenerator(logger) # Bu artık Engine'den enjekte ediliyor
         self.dynamic_scanner = dynamic_scanner_instance
         
         # Sigorta ve Görev Takibi
         self.consecutive_timeouts = 0
         self.circuit_open = False
-        self.active_coroutines = [] # Çalıştırılacak coroutine listesi
-        self.running_tasks = []     # Çalışan asyncio Task objeleri
+        self.active_coroutines: List[Any] = [] 
+        self.running_tasks: List[asyncio.Task] = [] 
         
+        # Enjekte edilecekler
+        self.payload_generator: Optional[PayloadGenerator] = None
+        self.reflection_context_type: Optional[str] = None
+
+
     @property
     def name(self):
         return "Cross-Site Scripting (XSS) Tarayıcı (Circuit Breaker)"
@@ -73,11 +83,14 @@ class XSSScanner(BaseScanner):
         session: aiohttp.ClientSession,
         completed_callback: Callable[[], None],
     ):
+        if self.payload_generator is None:
+            self.log(f"[{self.category}] Payload Generator enjekte edilmedi. Tarama atlanıyor.", "CRITICAL")
+            completed_callback()
+            return
+            
         try:
             # 0) Dinamik Timeout Ayarı
-            # Engine'den gelen değeri kontrol et, yoksa varsayılanı kullan
             calibration_ms = getattr(self, "calibration_latency_ms", 4000)
-            # Timeout = P90 * 10 (Max 20s, Min 5s)
             self.REQUEST_TIMEOUT = max(5.0, min(20.0, (calibration_ms / 1000.0) * 10.0))
             
             # Sigortayı ve listeleri sıfırla
@@ -86,24 +99,22 @@ class XSSScanner(BaseScanner):
             self.active_coroutines = []
             self.running_tasks = []
 
-            # 1) False Positive Risk Kontrolü (GÜNCELLENDİ - AGRESİF MOD)
+            # 1) False Positive Risk Kontrolü (AGRESİF MOD)
             fp_risk = await self._check_false_positive(url, session)
             if fp_risk:
-                # ARTIK RETURN YAPMIYORUZ. Sadece uyarı verip devam ediyoruz.
                 self.add_result(
                     self.category,
                     "INFO",
-                    "BİLGİ: Kontrol payload'u yanıta yansıdı. Hedef site girdileri olduğu gibi yansıtıyor olabilir. "
-                    "XSS taraması devam edecek ancak sonuçlar manuel doğrulanmalı.",
+                    "BİLGİ: Kontrol payload'u yanıta yansıdı. XSS taraması devam edecek ancak sonuçlar manuel doğrulanmalı.",
                     0,
                 )
                 self.log(f"[{self.category}] FP Kalkanı uyarı verdi ama tarama devam ettiriliyor (Aggressive Mode).", "WARNING")
 
-            # 2) Payload setini hazırla
-            context_aware_payloads = self.payload_generator.generate_context_aware_xss_payloads(
-                self.reflection_context_type
+            # 2) Payload setini hazırla (FAZ 29/35: Asenkron çekim)
+            context_aware_payloads = await self.payload_generator.generate_context_aware_xss_payloads(
+                self.reflection_context_type # Engine'den enjekte edilen context'i kullan
             )
-            base_payloads = self.payload_generator.generate_xss_payloads()
+            base_payloads = await self.payload_generator.generate_xss_payloads()
             all_payloads = list({*base_payloads, *context_aware_payloads})
 
             get_payloads = self._select_core_payloads(all_payloads, self.MAX_GET_PAYLOADS)
@@ -117,12 +128,12 @@ class XSSScanner(BaseScanner):
 
             for p in discovered_params:
                 if p not in query_params:
-                    query_params[p] = ["SYNARA_XSS_TEST"]
+                    query_params[p] = [self.CONTROL_PAYLOAD]
                     all_target_params.add(p)
 
             semaphore = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
             
-            # 4) GET Tasks Oluştur (active_coroutines listesine ekle)
+            # 4) GET Tasks Oluştur
             if all_target_params:
                 self.active_coroutines.extend(self._build_get_xss_tasks(
                     url, parsed, query_params, all_target_params, get_payloads, session, semaphore
@@ -149,7 +160,6 @@ class XSSScanner(BaseScanner):
                 try:
                     await asyncio.gather(*self.running_tasks)
                 except asyncio.CancelledError:
-                    # Görevler iptal edildiğinde buraya düşeriz
                     self.log(f"[{self.category}] Tarama görevleri iptal edildi (Circuit Breaker).", "WARNING")
                 except Exception:
                     pass
@@ -184,8 +194,7 @@ class XSSScanner(BaseScanner):
     
     # Sigorta Kontrolü ve GÖREV İPTALİ
     def _check_circuit_breaker(self):
-        # Eğer sigorta zaten attıysa True dön
-        if self.circuit_open:
+        if self.circuit_open: 
             return True
 
         if self.consecutive_timeouts >= self.MAX_CONSECUTIVE_TIMEOUTS:
@@ -194,7 +203,6 @@ class XSSScanner(BaseScanner):
             self.add_result(self.category, "WARNING", "XSS Taraması erken durduruldu (Rate Limit / Blackhole Tespiti).", 0)
             
             # --- ZOMBİ GÖREVLERİ ÖLDÜR ---
-            # Mevcut çalışan tüm görevleri iptal et
             for task in self.running_tasks:
                 if not task.done():
                     task.cancel()
@@ -405,33 +413,22 @@ class XSSScanner(BaseScanner):
                     text = await res.text()
                     
                     # Başarılı (sağlıklı) yanıtta sayacı sıfırla
-                    # 503/403 gibi Tarpit yanıtları sayacı sıfırlamamalı
                     if res.status == 200:
                         self.consecutive_timeouts = 0
 
                     if payload in text:
-                        # Eğer payload yansıdıysa ve script tag'i içeriyorsa KRİTİK, değilse WARNING
-                        # KRİTİK Playtika Düzeltmesi: Yansıyan XSS'in puanını düşür (CRITICAL -> HIGH, HIGH -> WARNING)
                         
                         original_level = "CRITICAL" if "<script" in payload.lower() or "on" in payload.lower() else "HIGH"
                         
-                        # Playtika Kuralı: PII/Hesap ele geçirme kanıtlanmadıkça DÜŞÜK ciddiyetli (CVSS < 4.0)
-                        # Bu yüzden en yüksek seviyeyi bile DÜŞÜK seviyesine (WARNING) çekiyoruz.
-                        
-                        # Eğer payload DOM manipülasyonuna (SCRIPT) yol açıyorsa, yine de YÜKSEK (HIGH) bırakıyoruz.
+                        # BBH Filtresi ve Heuristic Context'e göre ciddiyet düşürme
                         if self.reflection_context_type == "SCRIPT":
                             final_level = "HIGH" # DOM XSS Potansiyeli
                         elif original_level == "CRITICAL":
-                            # Reflected XSS (Script tag'i var) -> Orta Risk
-                            final_level = "WARNING"
+                            final_level = "WARNING" # Reflected XSS -> Orta Risk
                         else:
-                            # Reflected XSS (Sadece attribute veya düz metin) -> Düşük Risk
-                            final_level = "INFO" # INFO'ya çektik (SRP Düşüşü: 0.0)
-
-                        score = self._calculate_score_deduction(final_level)
+                            final_level = "INFO" # Düşük Risk
                         
-                        # YENİ: Auto-POC Verisi Hazırlama (Reflected XSS)
-                        # test_url zaten payload'ı içeriyor (_build_get_xss_tasks içinde oluşturuldu)
+                        score = self._calculate_score_deduction(final_level)
                         
                         self.add_result(
                             self.category,
@@ -447,27 +444,30 @@ class XSSScanner(BaseScanner):
                                 "headers": {}
                             }
                         )
+                        # Yapay Zeka Konsültasyonu (Güvenli Asenkron Çağrı)
+                        if hasattr(self, 'neural_engine') and self.neural_engine.is_active:
+                            asyncio.create_task(self.neural_engine.analyze_vulnerability({
+                                "category": self.category,
+                                "message": f"Reflected XSS kanıtlandı. Payload: {payload[:50]}...",
+                                "context": self.reflection_context_type
+                            }))
+
                         if self.reflection_context_type == "SCRIPT":
-                            # DOM XSS kontrolü, DOM zafiyetini kanıtlamak için her zaman çalıştırılmalı.
                             await self._maybe_run_dom_analysis(test_url, payload)
 
             except asyncio.TimeoutError:
-                # Önce sigortayı kontrol et (Atarsa circuit_open=True olur ve log basar)
                 if self.circuit_open: return
 
-                # Timeout sayacını artır
                 self.consecutive_timeouts += 1
-                
-                # Sigorta kontrolü yap (Eşik aşıldı mı? Aşıldıysa KILL komutu verilir)
                 if self._check_circuit_breaker():
-                    return # Sigorta attı, çık
+                    return
 
-                # Sigorta henüz atmadıysa uyarıyı bas
                 self.log(f"[{self.category}] GET XSS Timeout ({self.REQUEST_TIMEOUT:.1f}s). Sayaç: {self.consecutive_timeouts}/{self.MAX_CONSECUTIVE_TIMEOUTS}", "WARNING")
                 
             except asyncio.CancelledError:
-                # Görev iptal edildiğinde buraya düşer, sessizce çık
                 raise # Hatayı yukarı fırlat ki gather yakalasın
+            except aiohttp.client_exceptions.ClientConnectorError:
+                self.log(f"[{self.category}] Bağlantı Hatası alındı.", "WARNING")
             except Exception:
                 pass # Diğer hataları sessizce geç
 
@@ -505,20 +505,16 @@ class XSSScanner(BaseScanner):
                         self.consecutive_timeouts = 0
 
                     if payload in text:
-                        # Post XSS'te varsayılan olarak kritik zafiyet kabul edilir,
-                        # ancak Playtika kuralına göre SRP'yi DÜŞÜK'e çekiyoruz.
                         
                         original_level = "CRITICAL"
                         
                         if self.reflection_context_type == "SCRIPT":
                             final_level = "HIGH" # DOM XSS Potansiyeli
                         else:
-                            final_level = "WARNING" # Orta Riski (300$) temsil eder
+                            final_level = "WARNING" # Orta Riski temsil eder
                             
                         score = self._calculate_score_deduction(final_level)
 
-                        # YENİ: Auto-POC Verisi Hazırlama (POST XSS)
-                        # Data sözlüğünü url-encoded string'e çeviriyoruz ki raporda düzgün görünsün
                         post_body_str = urlencode(data)
 
                         self.add_result(
@@ -532,10 +528,18 @@ class XSSScanner(BaseScanner):
                                 "url": form_action,
                                 "method": "POST",
                                 "attack_vector": f"POST XSS (Fields: {', '.join(field_names)})",
-                                "data": post_body_str, # Body verisi
+                                "data": post_body_str, 
                                 "headers": {"Content-Type": "application/x-www-form-urlencoded"}
                             }
                         )
+                        # Yapay Zeka Konsültasyonu (Güvenli Asenkron Çağrı)
+                        if hasattr(self, 'neural_engine') and self.neural_engine.is_active:
+                            asyncio.create_task(self.neural_engine.analyze_vulnerability({
+                                "category": self.category,
+                                "message": f"POST XSS kanıtlandı. Payload: {payload[:50]}...",
+                                "context": f"Form: {form_action}"
+                            }))
+
                         if self.reflection_context_type == "SCRIPT":
                             await self._maybe_run_dom_analysis(form_action, payload)
 
@@ -550,6 +554,8 @@ class XSSScanner(BaseScanner):
             
             except asyncio.CancelledError:
                 raise
+            except aiohttp.client_exceptions.ClientConnectorError:
+                self.log(f"[{self.category}] Bağlantı Hatası alındı.", "WARNING")
             except Exception:
                 pass
 
@@ -569,7 +575,6 @@ class XSSScanner(BaseScanner):
             )
 
             if is_dom_vulnerable:
-                # DOM XSS kanıtlanırsa, bu PII/Hesap ele geçirme riski taşır ve HIGH/CRITICAL olarak kalmalıdır.
                 score = self._calculate_score_deduction("CRITICAL")
                 self.add_result(
                     self.category,
@@ -583,3 +588,13 @@ class XSSScanner(BaseScanner):
 
         except Exception as e:
             self.log(f"[{self.category}] DİNAMİK ANALİZ HATASI: {type(e).__name__} ({e})", "WARNING")
+
+    def _calculate_score_deduction(self, level: str) -> float:
+        """SRP puanını hesaplar (Engine'deki mantığın bir kopyası)."""
+        weight = self.engine_instance.MODULE_WEIGHTS.get(self.category, 0.0)
+        if level == "CRITICAL":
+            return weight
+        elif level == "HIGH":
+            return weight * 0.7
+        else: # WARNING/INFO
+            return weight * 0.3

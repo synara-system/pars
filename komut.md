@@ -7,6 +7,12 @@ pip install pillow
 
 
 
+
+SaaS Kurulum
+py start_server.py
+py debug_launcher.py
+
+
 Docker Kurulum
 git add .
 git commit -m "Pars API sunucu yapisi ve Dockerfile eklendi"

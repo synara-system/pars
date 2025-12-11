@@ -1,29 +1,30 @@
+// path: docs/PROJE_MANIFEST.md
+
 MESTEG TEKNOLOJİ | SYNARA AI SECURITY (PARS) - PROJE MANİFESTİ
 
 PROJE KİMLİĞİ
 
 Kod Adı: PARS (Enterprise Edition)
 Tür: Cloud-Native Ofansif Güvenlik Platformu (SaaS)
-Platform: Backend (Python FastAPI) + Frontend (CustomTkinter / Web Dashboard)
+Platform: Backend (Python FastAPI) + Frontend (Web Dashboard / Debug Client)
 Hedef: 7/24 Kesintisiz Zafiyet Analizi ve API Tabanlı Yönetim.
 
-MİMARİ (DÖNÜŞTÜRÜLDÜ)
+1. MİMARİ
 
-Eski Mimari: Monolitik Masaüstü Uygulaması.
-Yeni Mimari (v2.0): Dağıtık Mikroservis Yapısı.
+Yeni Mimari (v5.1): Dağıtık Mikroservis Yapısı.
+İstemciler: [WEB DASHBOARD] <---> [API GATEWAY (FastAPI)] <---> [WORKER (Synara Engine)]
 
-[İSTEMCİLER] <---> [API GATEWAY (FastAPI)] <---> [WORKER (Synara Engine)]
-^                       |                           |
-|                       v                           v
-(GUI/Web)              [DATABASE]                 [TARGET]
+Roller:
 
-API Layer: api_server.py - Dış dünyadan gelen emirleri karşılar.
+API Layer (api_server.py): Dış dünyadan gelen emirleri karşılar.
 
-Core Layer: core/ - İş mantığını ve tarama modüllerini barındırır.
+Core Layer (core/): İş mantığını ve tarama modüllerini barındırır.
 
-Headless Mode: Motor, GUI olmadan çalışabilir ve logları veritabanına/dosyaya yazar.
+Web Frontend (web_dashboard.html): Nihai kullanıcı arayüzü (Müşteri Akışı).
 
-GÜVENLİK KURALLARI
+Debug Client (Test/gui_main.py): RESMİ GELİŞTİRİCİ/DEBUG ARACI olarak kullanılır.
+
+2. GÜVENLİK KURALLARI
 
 API erişimi "API Key" veya "JWT Token" ile korunmalıdır.
 
@@ -31,7 +32,9 @@ Sunucu tarafında root yetkisiyle tarama çalıştırılmaz.
 
 WAF Evasion ve Proxy Yönetimi sunucu tarafında merkezi olarak yönetilir.
 
-VERİ YAPILARI
+Çekirdek Kural: Debug Client (gui_main.py) kullanıldığında, tüm AI Analiz ve Ağ istekleri (API Server'a gerek kalmadan) motorun Localhost'ta doğrudan çalışmasıyla sağlanır.
+
+3. VERİ YAPILARI
 
 Scan Object: Her tarama benzersiz bir scan_id (UUID) ile takip edilir.
 
@@ -39,36 +42,24 @@ Result Stream: Loglar ve bulgular stream (SSE/WebSocket) veya polling ile istemc
 
 Persistence: Raporlar sunucuda /reports dizininde veya S3 bucket'ta saklanır.
 
-TEKNİK ÇEKİRDEK (SUNUCU)
+4. DOSYA YAPISI HEDEFİ
 
-Dil: Python 3.10+
-
-Framework: FastAPI (Yüksek performanslı Asenkron API)
-
-Server: Uvicorn / Gunicorn
-
-Engine: Synara Async Engine (Mevcut yapı)
-
-Queue: Background Tasks (İleri fazda Redis/Celery)
-
-DOSYA YAPISI HEDEFİ
-
+Desktop/Cloud kopyaları temizlendi. Geliştirici ve Müşteri akışları ayrıldı.
 .
-├── api_server.py (YENİ: Sunucu Giriş Noktası)
-├── core/
-│   ├── engine.py (Headless Destekli)
-│   └── ... (Mevcut Modüller)
-├── reports/
-├── Dockerfile (Gelecek Faz)
-└── gui_client/ (Eski gui_main.py buraya taşınacak - İstemci)
+├── api_server.py (API Sunucusu)
+├── core/ (Motor Kodları)
+├── reports/ (Raporlar)
+├── Test/
+│   └── gui_main.py (RESMİ DEBUG ARACI)
+├── web_dashboard.html (MÜŞTERİ ARABİRİMİ)
+├── debug_launcher.py (Geliştirici/Debug Başlatıcısı)
+└── main.py (Müşteri Başlatıcısı)
 
-YOL_HARİTASI / ROADMAP
+5. YOL_HARİTASI / ROADMAP
 
-[2025-12-10] MİMARİ DÖNÜŞÜM BAŞLATILDI (Desktop -> Server).
-
-FastAPI entegrasyonu.
-
-Engine'in GUI bağımlılığının kaldırılması.
+[2025-12-10] MİMARİ TEMİZLİK (V5.1) TAMAMLANDI.
+Desktop/Cloud arayüz karışıklığı çözüldü. Odak tamamen Web/API üzerine kaydırıldı. Desktop GUI artık sadece geliştirici aracıdır.
 
 [Hedef] Docker Konteynerizasyonu.
 [Hedef] PostgreSQL Veritabanı Entegrasyonu.
+[Hedef] Nuclei Entegrasyonunun tam işlevselliği.

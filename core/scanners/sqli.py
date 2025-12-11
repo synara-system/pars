@@ -2,9 +2,9 @@
 
 import aiohttp
 import asyncio
-import time
 import re
-from typing import Callable, Dict, List, Tuple, Optional, Union
+from time import time # KRİTİK DÜZELTME: Sadece time() fonksiyonunu import ediyoruz
+from typing import Callable, Dict, List, Tuple, Optional, Union, Set
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 import statistics # KRİTİK EKLENTİ: İstatistiksel analiz için
 import math # Log2 için
@@ -41,7 +41,7 @@ class SQLiScanner(BaseScanner):
     CORRELATION_THRESHOLD: float = 0.90
 
     # Boolean-based ve error-based sonuç farkı için min. içerik farkı
-    MIN_CONTENT_DIFF_ABS: int = 80  
+    MIN_CONTENT_DIFF_ABS: int = 80 	
     MIN_CONTENT_DIFF_RATIO: float = 0.15 
 
     # ---------------------- Error-based Desenleri (GENİŞLETİLMİŞ) ---------------------- #
@@ -129,12 +129,13 @@ class SQLiScanner(BaseScanner):
 
     def __init__(self, logger, results_callback, request_callback: Callable[[], None]):
         super().__init__(logger, results_callback, request_callback)
-        self.payload_generator = PayloadGenerator(logger)
-
-        # Engine tarafından kalibrasyon sonrası set ediliyor
+        
+        # Engine tarafından enjekte edilecekler
         self.calibration_latency_ms: int = getattr(self, "calibration_latency_ms", 4000)
         self.latency_cv: float = getattr(self, "latency_cv", 0.0)
         self.calibration_headers: Dict[str, str] = getattr(self, "calibration_headers", {})
+        self.payload_generator: Optional[PayloadGenerator] = None # FAZ 29: Engine'den enjekte edilecek
+        self.discovered_params: Set[str] = set()
 
         # Dahili concurrency limiti (Sınıf değişkenine referans vererek düzelttik)
         self._sem = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
@@ -159,6 +160,11 @@ class SQLiScanner(BaseScanner):
         """
         Hybrid SQLi tarama mantığını uygular.
         """
+        if self.payload_generator is None:
+            self.log(f"[{self.category}] Payload Generator enjekte edilmedi (FAZ 29 hatası). Tarama atlanıyor.", "CRITICAL")
+            completed_callback()
+            return
+        
         try:
             # --- 1) Gürültü / Anti-Bot analizi ---
             latency_cv = getattr(self, "latency_cv", self.latency_cv)
@@ -193,15 +199,15 @@ class SQLiScanner(BaseScanner):
                     break
 
             # --- 2) Dinamik eşik (kalibrasyon) ---
-            # Artık korelasyon kullanıldığı için sadece genel bir referans tutuyoruz.
             calibration_ms = getattr(self, "calibration_latency_ms", self.calibration_latency_ms)
             baseline_threshold_s = calibration_ms / 1000.0
 
             if baseline_threshold_s < 4.0:
                 baseline_threshold_s = 4.0
 
-            # --- 3) Payload üretimi ---
-            base_payloads = self.payload_generator.generate_sqli_payloads()
+            # --- 3) Payload üretimi (AI/Context-Aware) ---
+            # KRİTİK DÜZELTME: generate_sqli_payloads artık await gerektiriyor
+            base_payloads = await self.payload_generator.generate_sqli_payloads() 
             contextual_payloads = self.payload_generator.generate_contextual_payloads([])
             
             generated_payloads = list(set(base_payloads + contextual_payloads))
@@ -657,12 +663,13 @@ class SQLiScanner(BaseScanner):
                     "headers": {}
                 }
             )
-            # Yapay Zeka Konsültasyonu
-            self.consult_ai({
-                "category": self.category,
-                "message": f"Time-Based SQLi kanıtlandı. Payload: {payload_to_send}",
-                "metrics": f"Correlation: {correlation:.2f}, Avg Delay: {avg_delay_on_max_sleep:.2f}s"
-            })
+            # Yapay Zeka Konsültasyonu (Güvenli Asenkron Çağrı)
+            if hasattr(self, 'neural_engine') and self.neural_engine.is_active: 
+                asyncio.create_task(self.neural_engine.analyze_vulnerability({
+                    "category": self.category,
+                    "message": f"Time-Based SQLi kanıtlandı. Payload: {payload_to_send}",
+                    "metrics": f"Correlation: {correlation:.2f}, Avg Delay: {avg_delay_on_max_sleep:.2f}s"
+                }))
             
             return
         
@@ -748,7 +755,7 @@ class SQLiScanner(BaseScanner):
         test_url = urlunparse(url_parts)
 
         try:
-            start = time.time()
+            start = time() # KRİTİK DÜZELTME: time.time() -> time()
             async with self._sem:
                 # Time-based testlerde gövde içeriği önemli değildir. Sadece süreyi ölç.
                 response, _ = await self._throttled_request(session, "GET", test_url) 
@@ -758,7 +765,7 @@ class SQLiScanner(BaseScanner):
 
             # Gövdeyi okuyalım ki Sunucu tamamen yanıtlasın
             await response.text()
-            end = time.time()
+            end = time() # KRİTİK DÜZELTME: time.time() -> time()
             return end - start
 
         except Exception as e:
@@ -767,3 +774,15 @@ class SQLiScanner(BaseScanner):
                 "WARNING",
             )
             return None
+            
+    # consult_ai metodu tamamen kaldırıldı ve çağrıları yukarıda asenkron olarak düzenlendi.
+
+    def _calculate_score_deduction(self, level: str) -> float:
+        """SRP puanını hesaplar (Engine'deki mantığın bir kopyası)."""
+        weight = self.engine_instance.MODULE_WEIGHTS.get(self.category, 0.0)
+        if level == "CRITICAL":
+            return weight
+        elif level == "HIGH":
+            return weight * 0.7
+        else: # WARNING
+            return weight * 0.3

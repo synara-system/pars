@@ -1,17 +1,28 @@
 # path: core/dynamic_scanner.py
 
 import logging
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException
-from urllib.parse import urlparse
 import time
+from urllib.parse import urlparse
 from typing import Optional, Tuple, List, Dict, Any, Union
 
-# Selenium element bulma stratejileri
-from selenium.webdriver.common.by import By 
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+# --- SAFE IMPORT BLOĞU ---
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException
+    from selenium.webdriver.common.by import By 
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    # Tip ipuçları için dummy sınıflar (IDE hatasını önler)
+    webdriver = None
+    Options = None
+    WebDriverException = Exception
+    TimeoutException = Exception
+    NoSuchElementException = Exception
+# -------------------------
 
 class DynamicScanner:
     """
@@ -26,33 +37,42 @@ class DynamicScanner:
     
     def __init__(self, logger_callback):
         self.log = logger_callback
-        self.driver: Optional[webdriver.Chrome] = None
+        self.driver: Optional[Any] = None # Tip Any yapıldı çünkü webdriver olmayabilir
         # Çekilen oturum verilerini tutar
         self.session_state: Dict[str, Any] = {"cookies": [], "localStorage": {}}
         
+        if not SELENIUM_AVAILABLE:
+            self.log("[DYNAMIC SCANNER] UYARI: Selenium kütüphanesi yüklü değil. Dinamik modül devre dışı.", "WARNING")
+
     def _setup_driver(self):
         """Headless Chrome tarayıcısını başlatır."""
+        
+        if not SELENIUM_AVAILABLE:
+            self.log("[DYNAMIC SCANNER] HATA: Selenium yüklü olmadığı için tarayıcı başlatılamaz.", "CRITICAL")
+            return False
+
         self.log("[DYNAMIC SCANNER] Headless Chrome başlatılıyor...", "INFO")
         
-        options = Options()
-        options.add_argument("--headless")       # Başsız mod
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")     # Güvenlik önlemi
-        options.add_argument("--ignore-certificate-errors")
-        options.add_argument("--window-size=1920,1080")
-        
-        # Anti-Bot önlemleri: Gerçek tarayıcı gibi davranmak için User-Agent ekle
-        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-        
-        # Ağ isteklerini yavaşlatmadan DOM'u analiz etmek için gerekli
-        options.page_load_strategy = 'eager' 
-
         try:
+            options = Options()
+            options.add_argument("--headless")       # Başsız mod
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")     # Güvenlik önlemi
+            options.add_argument("--ignore-certificate-errors")
+            options.add_argument("--window-size=1920,1080")
+            
+            # Anti-Bot önlemleri: Gerçek tarayıcı gibi davranmak için User-Agent ekle
+            options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            
+            # Ağ isteklerini yavaşlatmadan DOM'u analiz etmek için gerekli
+            options.page_load_strategy = 'eager' 
+
             # Sürücü yönetimini PyInstaller'a uyumlu tutmak için manuel yolla dener
             self.driver = webdriver.Chrome(options=options)
             self.driver.set_page_load_timeout(30) # Sayfa yükleme için maksimum 30 saniye
             self.log("[DYNAMIC SCANNER] Headless Chrome hazır.", "SUCCESS")
             return True
+            
         except Exception as e:
             self.log(f"[DYNAMIC SCANNER] KRİTİK HATA: Headless Chrome başlatılamadı. {e}", "CRITICAL")
             self.log("Lütfen 'chromedriver' dosyasının sistem PATH'inde veya uygulamanın yanında olduğundan emin olun.", "CRITICAL")
@@ -61,7 +81,10 @@ class DynamicScanner:
     def _cleanup(self):
         """Tarayıcıyı kapatır."""
         if self.driver:
-            self.driver.quit()
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
             self.driver = None
             self.log("[DYNAMIC SCANNER] Headless Chrome kapatıldı.", "INFO")
 
@@ -70,7 +93,7 @@ class DynamicScanner:
         [YENİ METOT] Tarayıcıdan oturum çerezlerini ve kritik localStorage verilerini çeker.
         """
         if not self.driver:
-            self.log("[SESSION EXTRACTOR] Driver aktif değil, oturum verisi çekilemedi.", "WARNING")
+            # Sessizce dön (Log spam yapma)
             return {"cookies": [], "localStorage": {}}
 
         try:
@@ -117,9 +140,11 @@ class DynamicScanner:
         Verilen URL'yi yükler, DOM'a payload enjekte eder ve XSS tetiklenmesini kontrol eder.
         Dönüş: (is_vulnerable, final_url)
         """
+        if not SELENIUM_AVAILABLE:
+            return False, ""
+
         # KRİTİK İYİLEŞTİRME: Payload'ı alert() yerine Synara'nın işaretçisini yazdıran 
         # ve tarayıcıyı dondurmayan bir JS kodu olarak hazırlarız.
-        # Payload'ı URL encode etmeyiz, zaten engine tarafından edilmiştir.
         js_payload = payload.replace("alert(1)", f"document.body.innerHTML += '{self.XSS_SUCCESS_MARKER}'")
         js_payload = js_payload.replace("confirm(1)", f"document.body.innerHTML += '{self.XSS_SUCCESS_MARKER}'")
         js_payload = js_payload.replace("prompt(1)", f"document.body.innerHTML += '{self.XSS_SUCCESS_MARKER}'")
@@ -172,14 +197,20 @@ class DynamicScanner:
         Verilen URL'yi yükler ve script aksiyonlarını sırayla yürütür.
         Dönüş: (success, final_url, session_state)
         """
+        if not SELENIUM_AVAILABLE:
+            return False, "", {}
+
         if not self.driver and not self._setup_driver():
             return False, "", {}
             
         self.log(f"[DYNAMIC SCRIPT] İlk URL yükleniyor: {url}", "INFO")
         
         # Giriş öncesi temizlik (güvenlik için)
-        self.driver.delete_all_cookies()
-        self.driver.execute_script("window.localStorage.clear();")
+        try:
+            self.driver.delete_all_cookies()
+            self.driver.execute_script("window.localStorage.clear();")
+        except Exception:
+            pass
         
         try:
             self.driver.get(url)
@@ -264,6 +295,8 @@ class DynamicScanner:
 
     def _get_by_type(self, selector_type: str) -> Optional[str]:
         """String selector tipini Selenium By objesine çevirir."""
+        if not SELENIUM_AVAILABLE: return None
+
         selector_type = selector_type.lower()
         if selector_type == 'id':
             return By.ID
@@ -284,6 +317,8 @@ class DynamicScanner:
         JS keşfi için tarayıcıyı kullanarak HTML sayfa kaynağını çeker.
         Bu, CDN engellemelerini aşmak için kullanılır.
         """
+        if not SELENIUM_AVAILABLE: return ""
+
         if not self.driver and not self._setup_driver():
             return ""
         
