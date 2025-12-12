@@ -6,12 +6,15 @@ from typing import Callable, List, Dict, Tuple
 from .base_scanner import BaseScanner
 from urllib.parse import urljoin, urlparse
 from difflib import SequenceMatcher # YENİ: Benzerlik analizi için
+import random # FAZ 36 için eklendi
 
 class AuthBypassScanner(BaseScanner):
     """
+    [AR-GE v21.0 - FAZ 36 OPTİMİZASYON]
     Yönetim panelleri ve hassas dizinler için yetki atlatma (Auth Bypass) ve
     görünmez erişim noktası (Ghost Key) taraması yapar.
     
+    FAZ 36: admin_paths ve bypass_payloads listeleri PayloadGenerator'dan çekiliyor.
     V21.0 UPDATE: Cloudflare/Next.js Soft 404'lerini ayıklamak için geliştirilmiş
     Difflib Benzerlik Analizi ve WAF İmzası kontrolü eklendi (FP-Guard).
     """
@@ -42,28 +45,9 @@ class AuthBypassScanner(BaseScanner):
             "rejected"
         ]
 
-        # Potansiyel Yönetim Yolları
-        self.admin_paths = [
-            "/admin", "/administrator", "/dashboard", "/login", "/wp-admin",
-            "/cpanel", "/config", "/api/admin", "/user/admin", "/root",
-            "/system", "/auth", "/panel", "/controlpanel", "/secure"
-        ]
-
-        # Bypass Teknikleri (Payloads)
-        self.bypass_payloads = [
-            "//",               # Çift slash (Normalization hatası)
-            "/%2e/",            # URL Encoded dot
-            "/%2e%2e/",         # Double dot encoded
-            "/.",               # Dot suffix
-            "..;/",             # Tomcat path traversal
-            "/./",              # Current dir
-            "?",                # Query trick
-            "%20",              # Space trick
-            "%09",              # Tab trick
-            "/.git",            # Git exposure (Bazen bypass sağlar)
-            "/static/..%2f",    # Static files üzerinden traversal
-            ";/admin"           # Semicolon injection
-        ]
+        # [ESKİ STATİK PAYLOADLAR KALDIRILDI]
+        # self.admin_paths = [...]
+        # self.bypass_payloads = [...]
         
         # Baseline (Referans) verisi
         self.baseline_content = ""
@@ -104,13 +88,20 @@ class AuthBypassScanner(BaseScanner):
         """
         Asenkron tarama mantığı.
         """
+        # KRİTİK KONTROL: PayloadGenerator'ın varlığını kontrol et
+        if not hasattr(self, 'payload_generator'):
+            self.log(f"[{self.category}] Payload Generator objesi bulunamadı. Tarama atlandı.", "CRITICAL")
+            completed_callback()
+            return
+        
         self.log(f"[{self.category}] Hedef üzerinde yetkilendirme kontrolleri test ediliyor...", "INFO")
         
         # 1. BASELINE AL (Referans Noktası)
-        # Kök dizine veya rastgele bir olmayan yola istek atarak sunucunun "Erişim Yok" tepkisini öğren.
+        # Kök dizime veya rastgele bir olmayan yola istek atarak sunucunun "Erişim Yok" tepkisini öğren.
         try:
             # Rastgele, olmayan bir yola istek atarak 404/403 baseline'ını al
-            baseline_url = urljoin(url, "/non_existent_path_for_baseline_" + str(self.request_callback.__hash__()))
+            # Bu, her taramada farklı bir hash oluşturarak önbellek sorunlarını önler.
+            baseline_url = urljoin(url, "/non_existent_path_for_baseline_" + str(random.randint(1000, 9999)))
             
             # self.TIMEOUT kullanıldı
             response, latency = await self._throttled_request(session, "GET", baseline_url, timeout=self.TIMEOUT)
@@ -129,19 +120,33 @@ class AuthBypassScanner(BaseScanner):
             completed_callback()
             return
 
+        # --- FAZ 36 KRİTİK GÜNCELLEME: Payload Generator'dan Verileri Çek ---
+        try:
+            # Payload Generator'dan Yönetim Yollarını ve Bypass Payload'larını çek
+            admin_paths: List[str] = self.payload_generator.generate_admin_paths()
+            bypass_payloads: List[str] = self.payload_generator.generate_auth_bypass_payloads()
+        except AttributeError:
+            # Payload Generator metotları eksikse (eski versiyon vb.)
+            self.log(f"[{self.category}] KRİTİK: PayloadGenerator.generate_admin_paths/generate_auth_bypass_payloads bulunamadı. Tarama atlandı.", "CRITICAL")
+            completed_callback()
+            return
+
+
         # 2. KRİTİK YOL ANALİZİ
         tasks = []
         semaphore = getattr(self, 'module_semaphore', asyncio.Semaphore(5))
 
-        for path in self.admin_paths:
+        for path in admin_paths: # Dinamik liste kullanıldı
+            # Temel yol testi
             full_url = urljoin(url, path)
-            tasks.append(self._check_bypass(session, full_url, semaphore))
+            tasks.append(self._check_bypass(session, full_url, semaphore, bypass_payloads)) # bypass_payloads eklendi
 
         await asyncio.gather(*tasks)
         
         completed_callback()
 
-    async def _check_bypass(self, session: aiohttp.ClientSession, target_url: str, semaphore: asyncio.Semaphore):
+    # _check_bypass metodunun tanımını güncelleyerek bypass_payloads listesini almasını sağla
+    async def _check_bypass(self, session: aiohttp.ClientSession, target_url: str, semaphore: asyncio.Semaphore, bypass_payloads: List[str]):
         """
         Tek bir hedef yol için bypass tekniklerini dener.
         """
@@ -150,7 +155,7 @@ class AuthBypassScanner(BaseScanner):
             if hasattr(self, 'engine_instance') and self.engine_instance.stop_requested:
                 return
 
-            for payload in self.bypass_payloads:
+            for payload in bypass_payloads: # Dinamik liste kullanıldı
                 # Payload'ı URL'e enjekte et
                 if target_url.endswith("/"):
                     test_url = target_url[:-1] + payload
@@ -222,8 +227,8 @@ class AuthBypassScanner(BaseScanner):
                                 
                         # Eğer kesin BYPASS (Status 200/201/302 ve LOW Similarity) ise CRITICAL'e yükseltme
                         if status == 200 and similarity < 0.5:
-                             level = "CRITICAL"
-                             msg = f"KRİTİK YETKİ ATLAMA: {test_url} [İçerik Tamamen Farklı ({similarity:.2f} Sim)]"
+                            level = "CRITICAL"
+                            msg = f"KRİTİK YETKİ ATLAMA: {test_url} [İçerik Tamamen Farklı ({similarity:.2f} Sim)]"
 
 
                         self.add_result(self.category, level, msg, self._calculate_score_deduction(level))

@@ -1,3 +1,4 @@
+# path: PARS Pentest Autonomous Recon System/start_server.py
 import subprocess
 import sys
 import os
@@ -24,6 +25,7 @@ def install_dependencies():
                 print(f"[OK] {package} yüklendi.")
             except Exception as e:
                 print(f"[HATA] {package} yüklenemedi: {e}")
+                print("İpucu: Eğer 'pip' bulunamadı hatası alıyorsanız, 'python -m pip install ...' deneyin.")
                 input("Hata oluştu. Çıkmak için Enter'a basın.")
                 sys.exit(1)
     print("[OK] Tüm kütüphaneler hazır.\n")
@@ -39,6 +41,7 @@ def run_server():
     print("-" * 50)
     
     # Sunucu komutu: uvicorn api_server:app --reload
+    # Not: Port 8000 kullanılıyor. Web Dashboard'da API_BASE_URL'i buna göre güncellemeliyiz.
     cmd = [sys.executable, "-m", "uvicorn", "api_server:app", "--host", "127.0.0.1", "--port", "8000", "--reload"]
     
     try:

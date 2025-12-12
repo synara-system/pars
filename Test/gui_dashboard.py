@@ -18,20 +18,22 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
-# --- PARS / NEON SPACE TEMASI (V5.1 Clean HUD) ---
-COLOR_BG = "#0b0c15"           # Deep Space Dark
-COLOR_SIDEBAR = "#141526"      # Nebula Dark
-COLOR_ACCENT = "#fa1e4e"       # GX Red
-COLOR_CYAN = "#00fff5"         # Cyber Cyan
-COLOR_PURPLE = "#a855f7"       # Neon Purple
-COLOR_SUCCESS = "#00e676"      # Neon Green
-COLOR_ERROR = "#ff2a6d"        # Glitch Red
-COLOR_WARNING = "#ffcc00"      # Cyber Yellow
-COLOR_TERMINAL = "#0f111a"     # Terminal Arka Planı
-COLOR_TERMINAL_FRAME = "#2d2e42" 
-COLOR_TEXT_PRIMARY = "#ffffff"
-COLOR_TEXT_SECONDARY = "#a0a0b5"
-COLOR_CARD_IDLE = "#1e202e"
+# --- FAZ 42 KRİTİK: TÜM SABİTLERİ STATİK BİR SINIF İÇİNE TAŞI ---
+class UI_CONSTANTS:
+    COLOR_BG = "#0b0c15"            # Deep Space Dark
+    COLOR_SIDEBAR = "#141526"       # Nebula Dark
+    COLOR_ACCENT = "#fa1e4e"        # GX Red
+    COLOR_CYAN = "#00fff5"          # Cyber Cyan
+    COLOR_PURPLE = "#a855f7"        # Neon Purple
+    COLOR_SUCCESS = "#00e676"       # Neon Green
+    COLOR_ERROR = "#ff2a6d"         # Glitch Red
+    COLOR_WARNING = "#ffcc00"       # Cyber Yellow
+    COLOR_TERMINAL = "#0f111a"      # Terminal Arka Planı
+    COLOR_TERMINAL_FRAME = "#2d2e42" 
+    COLOR_TEXT_PRIMARY = "#ffffff"
+    COLOR_TEXT_SECONDARY = "#a0a0b5"
+    COLOR_CARD_IDLE = "#1e202e"
+    COLOR_HIGH_CVSS = "#ff6b00"     # Orange (COLOR_HIGH_CVSS hatasının kaynağı)
 
 # --- TARAMA PROFİLLERİ (Engine bağımlılığını kaldırmak için buraya taşındı) ---
 SCAN_PROFILES = {
@@ -45,64 +47,67 @@ SCAN_PROFILES = {
 class ModuleStatusCard(ctk.CTkFrame):
     """
     Her tarama modülü için yüksek kaliteli, durum göstergeli kart.
+    FAZ 41: Varsayılan sönük rengi kaldırdık.
     """
-    def __init__(self, master, module_name, app_instance):
+    def __init__(self, master, module_name, module_key, app_instance):
         super().__init__(master, 
-                         fg_color="transparent", 
-                         corner_radius=6, 
-                         border_width=1, 
-                         border_color="#2d2e42", 
-                         height=45) 
+                          fg_color="transparent", 
+                          corner_radius=6, 
+                          border_width=1, 
+                          border_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME, 
+                          height=45) 
         
         self.grid_propagate(False) 
         self.columnconfigure(0, weight=1) # İsim
         self.columnconfigure(1, weight=0) # Durum Yazısı
+        # KRİTİK YAZIM HATASI DÜZELTİLDİ: self45 -> self
         self.columnconfigure(2, weight=0) # İkon
         
         self.app_instance = app_instance
+        self.module_key = module_key
         
         # Modül Adı
         self.name_label = ctk.CTkLabel(self, text=module_name, 
                                        font=ctk.CTkFont(family="Orbitron", size=11, weight="bold"), 
-                                       anchor="w", text_color="#64748b")
+                                       anchor="w", text_color=UI_CONSTANTS.COLOR_TEXT_SECONDARY)
         self.name_label.grid(row=0, column=0, padx=(12, 5), pady=0, sticky="w")
         self.name_label.place(relx=0.05, rely=0.5, anchor="w")
 
         # Durum Metni (▶ / ✓)
         self.info_label = ctk.CTkLabel(self, text="", 
                                        font=ctk.CTkFont(family="Consolas", size=14, weight="bold"), 
-                                       text_color=COLOR_TEXT_SECONDARY) 
+                                       text_color=UI_CONSTANTS.COLOR_TEXT_SECONDARY) 
         self.info_label.place(relx=0.85, rely=0.5, anchor="center")
 
         # Durum İkonu (En Sağda)
-        self.status_dot = ctk.CTkLabel(self, text="○", font=ctk.CTkFont(size=12), text_color="#475569")
+        # FAZ 41: Varsayılan İkonu daha görünür yapıyoruz
+        self.status_dot = ctk.CTkLabel(self, text="●", font=ctk.CTkFont(size=12), text_color="#475569")
         self.status_dot.place(relx=0.95, rely=0.5, anchor="center")
         
     def set_status(self, status, message=""):
+        """
+        Bu fonksiyon, gui_main.py'nin update_card_visual metoduna devredilmiştir.
+        Burada sadece basit durum görselleştirmesi kalmıştır.
+        """
         if status == "active":
-            self.configure(border_color=COLOR_CYAN, border_width=1)
+            # Ana rengi koru, sadece bordürü canlandır
+            self.configure(border_color=UI_CONSTANTS.COLOR_CYAN, border_width=1)
             self.name_label.configure(text_color="white")
-            self.info_label.configure(text="▶", text_color=COLOR_CYAN)
-            self.status_dot.configure(text="◎", text_color=COLOR_CYAN)
         elif status == "finished":
-            self.configure(border_color=COLOR_SUCCESS, border_width=1)
-            self.name_label.configure(text_color="white")
-            self.info_label.configure(text="✓", text_color=COLOR_SUCCESS)
-            self.status_dot.configure(text="●", text_color=COLOR_SUCCESS)
+            self.configure(border_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME, border_width=1)
+            self.name_label.configure(text_color=UI_CONSTANTS.COLOR_TEXT_SECONDARY)
         elif status == "waiting":
-            self.configure(border_color="#2d2e42", border_width=1)
-            self.name_label.configure(text_color="#64748b")
-            self.info_label.configure(text="", text_color=COLOR_TEXT_SECONDARY)
-            self.status_dot.configure(text="○", text_color="#475569")
+            self.configure(border_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME, border_width=1)
+            self.name_label.configure(text_color=UI_CONSTANTS.COLOR_TEXT_SECONDARY)
 
 class ThreatFeedCard(ctk.CTkFrame):
     """Sağ panelde akan canlı tehdit kartı."""
     def __init__(self, master, category, level, message):
-        color = "#3b82f6" 
-        if level == "CRITICAL": color = COLOR_ERROR
-        elif level == "HIGH": color = "#ff6b00"
-        elif level == "WARNING": color = COLOR_WARNING
-        elif level == "SUCCESS": color = COLOR_SUCCESS
+        color = UI_CONSTANTS.COLOR_PURPLE 
+        if level == "CRITICAL": color = UI_CONSTANTS.COLOR_ERROR
+        elif level == "HIGH": color = UI_CONSTANTS.COLOR_HIGH_CVSS
+        elif level == "WARNING": color = UI_CONSTANTS.COLOR_WARNING
+        elif level == "SUCCESS": color = UI_CONSTANTS.COLOR_SUCCESS
         
         super().__init__(master, fg_color="#11131c", corner_radius=4, border_width=0, height=50)
         self.pack_propagate(False)
@@ -116,12 +121,12 @@ class ThreatFeedCard(ctk.CTkFrame):
         ctk.CTkLabel(self.content, text=f"{category}", 
                      font=ctk.CTkFont(family="Orbitron", size=10, weight="bold"), 
                      text_color=color, anchor="w").pack(fill="x")
-                      
+                     
         clean_msg = message.replace('\n', ' ').strip()
         short_msg = (clean_msg[:40] + '..') if len(clean_msg) > 40 else clean_msg
         ctk.CTkLabel(self.content, text=short_msg, 
                      font=ctk.CTkFont(family="Consolas", size=9), 
-                     text_color="#94a3b8", anchor="w").pack(fill="x")
+                     text_color=UI_CONSTANTS.COLOR_TEXT_SECONDARY, anchor="w").pack(fill="x")
 
 class AIThreatVisualizer(ctk.CTkFrame):
     """
@@ -130,11 +135,11 @@ class AIThreatVisualizer(ctk.CTkFrame):
     """
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
-        self.canvas = tk.Canvas(self, bg=COLOR_SIDEBAR, highlightthickness=0, width=220, height=220)
+        self.canvas = tk.Canvas(self, bg=UI_CONSTANTS.COLOR_SIDEBAR, highlightthickness=0, width=220, height=220)
         self.canvas.pack(fill="both", expand=True, padx=0, pady=0)
         
         self.score = 100.0
-        self.risk_counts = {"CRITICAL": 0, "HIGH": 0, "WARNING": 0}
+        self.risk_counts = {"CRITICAL": 0, "HIGH": 0, "WARNING": 0, "INFO": 0} # INFO eklendi
         self.angle = 0
         self.blips = [] # (angle, distance, color, size)
         
@@ -157,7 +162,7 @@ class AIThreatVisualizer(ctk.CTkFrame):
             self.blips.append({
                 "angle": random.randint(0, 360),
                 "dist": random.uniform(0.2, 0.4), # Merkeze yakın
-                "color": COLOR_ERROR,
+                "color": UI_CONSTANTS.COLOR_ERROR,
                 "size": random.randint(6, 9)
             })
             
@@ -166,7 +171,7 @@ class AIThreatVisualizer(ctk.CTkFrame):
             self.blips.append({
                 "angle": random.randint(0, 360),
                 "dist": random.uniform(0.45, 0.7),
-                "color": "#ff6b00",
+                "color": UI_CONSTANTS.COLOR_HIGH_CVSS,
                 "size": random.randint(4, 7)
             })
             
@@ -177,7 +182,7 @@ class AIThreatVisualizer(ctk.CTkFrame):
             self.blips.append({
                 "angle": random.randint(0, 360),
                 "dist": random.uniform(0.75, 0.9),
-                "color": COLOR_WARNING,
+                "color": UI_CONSTANTS.COLOR_WARNING,
                 "size": random.randint(3, 5)
             })
 
@@ -201,10 +206,8 @@ class AIThreatVisualizer(ctk.CTkFrame):
         for i in range(1, 4):
             r = radius * (i / 3)
             alpha = int(40 + 20 * math.sin(math.radians(self.angle * 2))) # Nefes alma efekti
-            # Tkinter alpha desteklemediği için sabit renk kullanıyoruz,
-            # ama çizgi kalınlığı veya rengiyle oynayabiliriz.
-            outline_col = "#2d2e42"
-            if i == 3: outline_col = COLOR_ACCENT # Dış halka
+            outline_col = UI_CONSTANTS.COLOR_TERMINAL_FRAME
+            if i == 3: outline_col = UI_CONSTANTS.COLOR_ACCENT # Dış halka
             
             self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r, outline=outline_col, width=1)
 
@@ -214,10 +217,9 @@ class AIThreatVisualizer(ctk.CTkFrame):
         scan_y = cy + radius * math.sin(scan_angle_rad)
         
         # Radar çizgisi
-        self.canvas.create_line(cx, cy, scan_x, scan_y, fill=COLOR_CYAN, width=2)
+        self.canvas.create_line(cx, cy, scan_x, scan_y, fill=UI_CONSTANTS.COLOR_CYAN, width=2)
         
         # Radar izi (Trail) - Simüle edilmiş
-        # Tkinter'da gradient olmadığı için birkaç çizgi ile yapıyoruz
         for i in range(1, 20):
             trail_angle = self.angle - i
             trail_rad = math.radians(trail_angle)
@@ -242,21 +244,21 @@ class AIThreatVisualizer(ctk.CTkFrame):
             if diff < 15 or diff > 345:
                 # Parlama efekti (Highlight)
                 self.canvas.create_oval(bx-blip['size']-2, by-blip['size']-2, 
-                                        bx+blip['size']+2, by+blip['size']+2, 
-                                        outline="white", width=1)
+                                         bx+blip['size']+2, by+blip['size']+2, 
+                                         outline="white", width=1)
                 
             self.canvas.create_oval(bx-blip['size']/2, by-blip['size']/2, 
-                                    bx+blip['size']/2, by+blip['size']/2, 
-                                    fill=blip['color'], outline="")
+                                     bx+blip['size']/2, by+blip['size']/2, 
+                                     fill=blip['color'], outline="")
 
         # 4. Merkez Skor (HUD)
         # Ortada şeffaf/koyu bir daire
         inner_r = radius * 0.35
-        self.canvas.create_oval(cx-inner_r, cy-inner_r, cx+inner_r, cy+inner_r, fill=COLOR_BG, outline=COLOR_CYAN)
+        self.canvas.create_oval(cx-inner_r, cy-inner_r, cx+inner_r, cy+inner_r, fill=UI_CONSTANTS.COLOR_BG, outline=UI_CONSTANTS.COLOR_CYAN)
         
-        score_color = COLOR_SUCCESS
-        if self.score < 50: score_color = COLOR_ERROR
-        elif self.score < 80: score_color = COLOR_WARNING
+        score_color = UI_CONSTANTS.COLOR_SUCCESS
+        if self.score < 50: score_color = UI_CONSTANTS.COLOR_ERROR
+        elif self.score < 80: score_color = UI_CONSTANTS.COLOR_WARNING
         
         self.canvas.create_text(cx, cy, text=f"{int(self.score)}", fill=score_color, font=("Orbitron", 24, "bold"))
 
@@ -267,28 +269,28 @@ class AIThreatVisualizer(ctk.CTkFrame):
 class RichConsole(ctk.CTkFrame):
     """Entegre scrollbar'lı Terminal Widget'ı."""
     def __init__(self, master, **kwargs):
-        super().__init__(master, fg_color=COLOR_TERMINAL, corner_radius=6, border_width=1, border_color=COLOR_TERMINAL_FRAME)
+        super().__init__(master, fg_color=UI_CONSTANTS.COLOR_TERMINAL, corner_radius=6, border_width=1, border_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.scrollbar = ctk.CTkScrollbar(self, orientation="vertical", width=10, fg_color="transparent", button_color="#334155", button_hover_color=COLOR_ACCENT)
+        self.scrollbar = ctk.CTkScrollbar(self, orientation="vertical", width=10, fg_color="transparent", button_color="#334155", button_hover_color=UI_CONSTANTS.COLOR_ACCENT)
         self.scrollbar.grid(row=0, column=1, sticky="ns", padx=(0, 2), pady=2)
 
-        self.text_area = tk.Text(self, bg=COLOR_TERMINAL, fg="#e0e0e0", bd=0, padx=15, pady=15, 
-                                 font=("Consolas", 10), selectbackground=COLOR_ACCENT, selectforeground="white",
+        self.text_area = tk.Text(self, bg=UI_CONSTANTS.COLOR_TERMINAL, fg=UI_CONSTANTS.COLOR_TEXT_PRIMARY, bd=0, padx=15, pady=15, 
+                                 font=("Consolas", 10), selectbackground=UI_CONSTANTS.COLOR_ACCENT, selectforeground="white",
                                  highlightthickness=0, yscrollcommand=self.scrollbar.set)
         self.text_area.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
         
         self.scrollbar.configure(command=self.text_area.yview)
 
         # Renkler
-        self.text_area.tag_config("HEADER", foreground=COLOR_PURPLE, font=("Consolas", 11, "bold"))
-        self.text_area.tag_config("INFO", foreground=COLOR_TEXT_SECONDARY) 
-        self.text_area.tag_config("SUCCESS", foreground=COLOR_SUCCESS, font=("Consolas", 10, "bold"))
-        self.text_area.tag_config("WARNING", foreground=COLOR_WARNING)
-        self.text_area.tag_config("CRITICAL", foreground=COLOR_ERROR, font=("Consolas", 11, "bold"))
-        self.text_area.tag_config("CMD", foreground=COLOR_CYAN, font=("Consolas", 10, "bold"))
-        self.text_area.tag_config("EXPLOIT_RUN", foreground="#0b0c15", background=COLOR_ACCENT, font=("Consolas", 10, "bold"))
+        self.text_area.tag_config("HEADER", foreground=UI_CONSTANTS.COLOR_PURPLE, font=("Consolas", 11, "bold"))
+        self.text_area.tag_config("INFO", foreground=UI_CONSTANTS.COLOR_TEXT_SECONDARY) 
+        self.text_area.tag_config("SUCCESS", foreground=UI_CONSTANTS.COLOR_SUCCESS, font=("Consolas", 10, "bold"))
+        self.text_area.tag_config("WARNING", foreground=UI_CONSTANTS.COLOR_WARNING)
+        self.text_area.tag_config("CRITICAL", foreground=UI_CONSTANTS.COLOR_ERROR, font=("Consolas", 11, "bold"))
+        self.text_area.tag_config("CMD", foreground=UI_CONSTANTS.COLOR_CYAN, font=("Consolas", 10, "bold"))
+        self.text_area.tag_config("EXPLOIT_RUN", foreground="#0b0c15", background=UI_CONSTANTS.COLOR_ACCENT, font=("Consolas", 10, "bold"))
         
         self.text_area.tag_bind("EXPLOIT_RUN", "<Button-1>", self._on_exploit_run_click)
         self.text_area.tag_bind("EXPLOIT_RUN", "<Enter>", lambda e: self.text_area.configure(cursor="hand2"))
@@ -353,23 +355,19 @@ class RichConsole(ctk.CTkFrame):
             target_key = CATEGORY_MAP.get(raw_category, raw_category)
             
             if hasattr(app, 'scanner_status_cards'):
-                for mod_key, card_data in app.scanner_status_cards.items():
-                    if mod_key.upper() in target_key.upper() or target_key.upper() in mod_key.upper():
-                        if hasattr(app, 'last_active_card') and app.last_active_card and app.last_active_card != card_data['frame']:
-                            pass 
-                        
-                        card_data['frame'].set_status("active")
-                        app.last_active_card = card_data['frame']
-                        break
-            
+                # Sadece ilgili modül kartını bul
+                card_key = target_key.upper()
+                if card_key in app.scanner_status_cards:
+                     app.update_card_visual(card_key, level)
+                # Subdomain/RCE türevlerini ana modüle eşitle
+                elif 'SUBDOMAIN' in card_key or 'RCE' in card_key:
+                     if 'TAKEOVER' in card_key: app.update_card_visual('SUBDOMAIN', level)
+                     elif 'SSRF' in card_key: app.update_card_visual('RCE_SSRF', level)
+                
             # --- TEHDİT AKIŞINA EKLEME ---
             if level in ["CRITICAL", "HIGH", "WARNING", "SUCCESS"] and hasattr(app, 'add_threat_feed_item'):
                  app.add_threat_feed_item(raw_category, level, log_content)
             
-            # --- HUD GÜNCELLEME (Cloud Mode'da bu çağrı API Client tarafından yapılacak) ---
-            # if hasattr(app, 'scanner') and hasattr(app, 'hud_panel'):
-            #     app.hud_panel.update_stats(app.scanner.score, app.risk_counts)
-
             if "CRITICAL" in level: cat_tag = "CRITICAL"
             elif "WARNING" in level: cat_tag = "WARNING"
             elif "SUCCESS" in level: cat_tag = "SUCCESS"
@@ -379,8 +377,8 @@ class RichConsole(ctk.CTkFrame):
         # Scan Completed kontrolü cloud modunda farklı işlenir, burada sadece görsel
         if "Scan Completed" in message or "Tarama Bitti" in message:
              if hasattr(app, 'scanner_status_cards'):
-                for mod_key, card_data in app.scanner_status_cards.items():
-                    card_data['frame'].set_status("finished")
+                 for mod_key, card_data in app.scanner_status_cards.items():
+                     app.update_card_visual(mod_key, "SUCCESS")
 
         timestamp = datetime.datetime.now().strftime('%H:%M:%S') 
         self.text_area.insert("end", f"{timestamp} ", "INFO")
@@ -396,7 +394,7 @@ class RichConsole(ctk.CTkFrame):
             exploit_id = str(uuid.uuid4())[:8]
             self.exploit_data_map[exploit_id] = exploit_data
             run_tag_name = f"run_{exploit_id}"
-            self.text_area.tag_config(run_tag_name, foreground="#0b0c15", background=COLOR_ACCENT, font=("Consolas", 9, "bold"))
+            self.text_area.tag_config(run_tag_name, foreground="#0b0c15", background=UI_CONSTANTS.COLOR_ACCENT, font=("Consolas", 9, "bold"))
             self.text_area.tag_bind(run_tag_name, "<Button-1>", self._on_exploit_run_click)
             self.text_area.tag_bind(run_tag_name, "<Enter>", lambda e: self.text_area.configure(cursor="hand2"))
             self.text_area.tag_bind(run_tag_name, "<Leave>", lambda e: self.text_area.configure(cursor="arrow"))
@@ -414,7 +412,7 @@ class RichConsole(ctk.CTkFrame):
         if hasattr(app, 'lbl_status_dot') and app.lbl_status_dot:
              status_text = "SCANNING" if "BAŞLATILIYOR" in message else "ACTIVE"
              if "TAMAMLANDI" in message or "Scan Completed" in message: status_text = "IDLE"
-             app.lbl_status_dot.configure(text=f"● {status_text}", text_color=COLOR_CYAN)
+             app.lbl_status_dot.configure(text=f"● {status_text}", text_color=UI_CONSTANTS.COLOR_CYAN)
 
 def add_threat_feed_item_func(app, category, level, message):
     if not hasattr(app, 'threat_feed_scroll'): return
@@ -424,50 +422,65 @@ def add_threat_feed_item_func(app, category, level, message):
     except: pass
 
 def initialize_cards(app):
+    """
+    FAZ 41: Toplam 26 Modülün hepsini doğru sırada ve doğru görünürlükte ekler.
+    """
     for widget in app.module_status_frame.winfo_children():
         widget.destroy()
     app.scanner_status_cards = {}
     
+    # Faz 41: Tüm 26 Modülün Listesi (Log kayıtlarına göre güncellenmiş)
+    # Bu listenin doğru olduğunu varsayıyoruz (Çünkü engine'de 26 modül var)
+    full_module_keys = [
+        'WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'HEADERS', 'FILES', 
+        'PORT_SCAN', 'HEURISTIC', 'AUTH_BYPASS', 'LFI', 'XSS', 'SQLI', 'IDOR', 'RCE_SSRF', 
+        'JSON_API', 'CLOUD_EXPLOIT', 'REACT_EXPLOIT', 'NUCLEI', 'INTERNAL_SCAN', 
+        'JS_ENDPOINT', 'GRAPHQL', 'CLIENT_LOGIC', 'HTTP_SMUGGLING', 'BUSINESS_LOGIC',
+        'OSINT', 'LEAKAGE' 
+    ]
+    
     display_names = {
         'WAF_DETECT': 'WAF / FIREWALL',
         'SUBDOMAIN': 'SUBDOMAIN RECON',
+        'SUBDOMAIN_TAKEOVER': 'SUBDOMAIN TAKEOVER',
         'PRE_SCAN': 'PARAM DISCOVERY',
-        'PORT_SCAN': 'PORT SCANNER',
         'HEADERS': 'HTTP HEADERS',
         'FILES': 'SENSITIVE FILES',
+        'PORT_SCAN': 'PORT SCANNER',
         'HEURISTIC': 'HEURISTIC ENGINE',
         'AUTH_BYPASS': 'AUTH BYPASS',
         'LFI': 'LFI SCANNER',
         'XSS': 'XSS SCANNER',
-        'SQLI': 'SQLi SCANNER',
+        'SQLI': 'SQLI SCANNER',
         'IDOR': 'IDOR SCANNER',
         'RCE_SSRF': 'RCE / SSRF',
         'JSON_API': 'API FUZZER',
+        'CLOUD_EXPLOIT': 'CLOUDSTORM',
+        'REACT_EXPLOIT': 'REACT EXPLOIT',
         'NUCLEI': 'NUCLEI ENGINE', 
         'INTERNAL_SCAN': 'SYSTEM CORE',
         'JS_ENDPOINT': 'JS ENDPOINTS',
         'GRAPHQL': 'GRAPHQL SECURITY',
-        'CLOUD_EXPLOIT': 'CLOUDSTORM'
+        'CLIENT_LOGIC': 'CLIENT LOGIC', 
+        'HTTP_SMUGGLING': 'HTTP SMUGGLING',
+        'BUSINESS_LOGIC': 'BUSINESS LOGIC',
+        'OSINT': 'OSINT', 
+        'LEAKAGE': 'DATA LEAKAGE' 
     }
     
-    # Cloud modunda FULL_SCAN modülleri varsayalım
-    full_scan_modules = [
-        'WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'HEADERS', 'FILES', 
-        'PORT_SCAN', 'HEURISTIC', 'AUTH_BYPASS', 'LFI', 'XSS', 'SQLI', 'IDOR', 'RCE_SSRF', 
-        'JSON_API', 'CLOUD_EXPLOIT', 'REACT_EXPLOIT', 'NUCLEI', 'INTERNAL_SCAN', 
-        'JS_ENDPOINT', 'GRAPHQL', 'CLIENT_LOGIC', 'HTTP_SMUGGLING', 'BUSINESS_LOGIC'
-    ]
-    
     row_idx = 0
-    for mod_key in full_scan_modules:
+    for mod_key in full_module_keys:
         display_name = display_names.get(mod_key, mod_key.replace('_', ' '))
-        card_instance = ModuleStatusCard(app.module_status_frame, display_name, app)
+        # FAZ 41: ModuleStatusCard'a modül anahtarını da gönderiyoruz
+        card_instance = ModuleStatusCard(app.module_status_frame, display_name, mod_key, app)
+        # Kartın yerleşimindeki kaymayı engellemek için sadece 0. sütun kullan
         card_instance.grid(row=row_idx, column=0, sticky="ew", pady=(4, 0), padx=2)
         
+        # FAZ 41: STATUS KARTININ İÇİNDEKİ WIDGET'LARI REFERANS AL
         app.scanner_status_cards[mod_key] = {
             'frame': card_instance,
-            'dot': card_instance.status_dot,
-            'info': card_instance.info_label, 
+            'dot': card_instance.status_dot, # status_dot
+            'info': card_instance.info_label, # info_label
             'max_cvss': 0.0
         }
         row_idx += 1
@@ -479,6 +492,7 @@ def setup_dashboard_tab(app):
     tab.grid_columnconfigure(2, weight=0) 
     tab.grid_rowconfigure(3, weight=1) 
     
+    # KRİTİK DÜZELTME: app.add_threat_feed_item için lambda fonksiyonu
     app.add_threat_feed_item = lambda c, l, m: add_threat_feed_item_func(app, c, l, m)
     app.last_active_card = None
 
@@ -486,27 +500,27 @@ def setup_dashboard_tab(app):
     header = ctk.CTkFrame(tab, fg_color="transparent")
     header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(15, 10), padx=20)
     # SYNARA SYSTEM -> PARS DASHBOARD
-    ctk.CTkLabel(header, text=" PARS", font=ctk.CTkFont(family="Orbitron", size=32, weight="bold"), text_color=COLOR_ACCENT).pack(side="left")
+    ctk.CTkLabel(header, text=" PARS", font=ctk.CTkFont(family="Orbitron", size=32, weight="bold"), text_color=UI_CONSTANTS.COLOR_ACCENT).pack(side="left")
     # ULTIMATE SECURITY CORE -> SECURITY OPERATIONS CENTER
-    ctk.CTkLabel(header, text="Pentest Autonomous Recon System", font=ctk.CTkFont(family="Consolas", size=14), text_color=COLOR_CYAN).pack(side="left", padx=15, pady=12)
+    ctk.CTkLabel(header, text="Pentest Autonomous Recon System", font=ctk.CTkFont(family="Consolas", size=14), text_color=UI_CONSTANTS.COLOR_CYAN).pack(side="left", padx=15, pady=12)
 
     # INPUT BAR
-    input_bar = ctk.CTkFrame(tab, fg_color=COLOR_SIDEBAR, corner_radius=8, border_width=1, border_color=COLOR_TERMINAL_FRAME)
+    input_bar = ctk.CTkFrame(tab, fg_color=UI_CONSTANTS.COLOR_SIDEBAR, corner_radius=8, border_width=1, border_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME)
     input_bar.grid(row=1, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 20))
     input_bar.grid_columnconfigure(1, weight=1)
     app.input_bar = input_bar 
 
-    ctk.CTkLabel(input_bar, text="TARGET:", font=ctk.CTkFont(weight="bold", size=13), text_color=COLOR_CYAN).grid(row=0, column=0, padx=20, pady=15)
-    app.entry_url = ctk.CTkEntry(input_bar, placeholder_text="https://target.com", height=40, width=300, border_color=COLOR_TERMINAL_FRAME, fg_color=COLOR_BG, text_color="white", font=("Consolas", 13))
+    ctk.CTkLabel(input_bar, text="TARGET:", font=ctk.CTkFont(weight="bold", size=13), text_color=UI_CONSTANTS.COLOR_CYAN).grid(row=0, column=0, padx=20, pady=15)
+    app.entry_url = ctk.CTkEntry(input_bar, placeholder_text="https://target.com", height=40, width=300, border_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME, fg_color=UI_CONSTANTS.COLOR_BG, text_color="white", font=("Consolas", 13))
     app.entry_url.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
-    app.entry_url.insert(0, "http://google-gruyere.appspot.com") 
+    app.entry_url.insert(0, "https://google-gruyere.appspot.com") 
 
     profile_names = list(SCAN_PROFILES.keys())
-    app.profile_select = ctk.CTkOptionMenu(input_bar, values=profile_names, width=140, height=40, fg_color=COLOR_BG, button_color=COLOR_TERMINAL_FRAME, button_hover_color=COLOR_ACCENT, text_color="white", dropdown_fg_color=COLOR_SIDEBAR, font=("Roboto", 12))
+    app.profile_select = ctk.CTkOptionMenu(input_bar, values=profile_names, width=140, height=40, fg_color=UI_CONSTANTS.COLOR_BG, button_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME, button_hover_color=UI_CONSTANTS.COLOR_ACCENT, text_color="white", dropdown_fg_color=UI_CONSTANTS.COLOR_SIDEBAR, font=("Roboto", 12))
     app.profile_select.set("BUG_BOUNTY_CORE") 
     app.profile_select.grid(row=0, column=2, padx=10, pady=15)
 
-    app.btn_scan = ctk.CTkButton(input_bar, text="ENGAGE SYSTEM", height=40, width=150, font=ctk.CTkFont(weight="bold", size=14), fg_color=COLOR_ACCENT, hover_color="#c71f45", corner_radius=6)
+    app.btn_scan = ctk.CTkButton(input_bar, text="ENGAGE SYSTEM", height=40, width=150, font=ctk.CTkFont(weight="bold", size=14), fg_color=UI_CONSTANTS.COLOR_ACCENT, hover_color="#c71f45", corner_radius=6)
     app.btn_scan.grid(row=0, column=3, padx=20, pady=15)
     
     # LEFT PANEL (Modules)
@@ -515,24 +529,25 @@ def setup_dashboard_tab(app):
     left_panel.grid_rowconfigure(1, weight=1)
     left_panel.grid_columnconfigure(0, weight=1)
     
-    status_header = ctk.CTkFrame(left_panel, fg_color=COLOR_SIDEBAR, corner_radius=6, height=35)
+    status_header = ctk.CTkFrame(left_panel, fg_color=UI_CONSTANTS.COLOR_SIDEBAR, corner_radius=6, height=35)
     status_header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-    ctk.CTkLabel(status_header, text="MODULES STATUS", text_color=COLOR_TEXT_SECONDARY, font=ctk.CTkFont(size=12, weight="bold")).pack(pady=8)
+    ctk.CTkLabel(status_header, text="MODULES STATUS", text_color=UI_CONSTANTS.COLOR_TEXT_SECONDARY, font=ctk.CTkFont(size=12, weight="bold")).pack(pady=8)
     
-    app.module_status_frame = ctk.CTkScrollableFrame(left_panel, fg_color="transparent", corner_radius=0, width=240, scrollbar_button_color=COLOR_TERMINAL_FRAME, scrollbar_button_hover_color=COLOR_ACCENT)
+    app.module_status_frame = ctk.CTkScrollableFrame(left_panel, fg_color="transparent", corner_radius=0, width=240, scrollbar_button_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME, scrollbar_button_hover_color=UI_CONSTANTS.COLOR_ACCENT)
     app.module_status_frame.grid(row=1, column=0, sticky="nsew")
     
     # CENTER PANEL (Terminal)
-    app.terminal_outer_frame = ctk.CTkFrame(tab, fg_color=COLOR_TERMINAL, corner_radius=8, border_width=1, border_color=COLOR_ACCENT)
+    app.terminal_outer_frame = ctk.CTkFrame(tab, fg_color=UI_CONSTANTS.COLOR_TERMINAL, corner_radius=8, border_width=1, border_color=UI_CONSTANTS.COLOR_ACCENT)
     app.terminal_outer_frame.grid(row=3, column=1, sticky="nsew", padx=5, pady=(0, 20))
     app.terminal_outer_frame.grid_rowconfigure(1, weight=1)
     app.terminal_outer_frame.grid_columnconfigure(0, weight=1)
     
-    term_header = ctk.CTkFrame(app.terminal_outer_frame, height=30, fg_color=COLOR_ACCENT, corner_radius=0)
+    term_header = ctk.CTkFrame(app.terminal_outer_frame, height=30, fg_color=UI_CONSTANTS.COLOR_ACCENT, corner_radius=0)
     term_header.grid(row=0, column=0, sticky="ew")
     # SYSTEM CONSOLE -> PARS_CLI
     ctk.CTkLabel(term_header, text=" >_ PARS_CLI CONSOLE", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"), text_color="#0b0c15").pack(side="left", padx=10)
     
+    # KRİTİK DÜZELTME: RichConsole artık UI_CONSTANTS'ı kullanıyor
     app.console = RichConsole(app.terminal_outer_frame)
     app.console.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
     
@@ -543,7 +558,7 @@ def setup_dashboard_tab(app):
     right_panel.grid_columnconfigure(0, weight=1)
     
     # HUD Frame (GÜNCELLENDİ: SecurityShieldHUD -> AIThreatVisualizer)
-    app.chart_frame = ctk.CTkFrame(right_panel, fg_color=COLOR_SIDEBAR, width=240, height=220, corner_radius=8, border_width=1, border_color=COLOR_TERMINAL_FRAME)
+    app.chart_frame = ctk.CTkFrame(right_panel, fg_color=UI_CONSTANTS.COLOR_SIDEBAR, width=240, height=220, corner_radius=8, border_width=1, border_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME)
     app.chart_frame.grid(row=0, column=0, sticky="ew", pady=(0, 15))
     app.chart_frame.pack_propagate(False) # Boyut sabitle
     
@@ -552,15 +567,15 @@ def setup_dashboard_tab(app):
     app.hud_panel.pack(fill="both", expand=True)
 
     # Feed
-    feed_header = ctk.CTkFrame(right_panel, fg_color=COLOR_SIDEBAR, corner_radius=6, height=35)
+    feed_header = ctk.CTkFrame(right_panel, fg_color=UI_CONSTANTS.COLOR_SIDEBAR, corner_radius=6, height=35)
     feed_header.grid(row=1, column=0, sticky="ew", pady=(0, 5))
-    ctk.CTkLabel(feed_header, text="LIVE INTEL FEED", text_color=COLOR_CYAN, font=ctk.CTkFont(size=11, weight="bold")).pack(pady=8)
+    ctk.CTkLabel(feed_header, text="LIVE INTEL FEED", text_color=UI_CONSTANTS.COLOR_CYAN, font=ctk.CTkFont(size=11, weight="bold")).pack(pady=8)
     
-    app.threat_feed_scroll = ctk.CTkScrollableFrame(right_panel, fg_color="#0f111a", corner_radius=6, width=240, scrollbar_button_color=COLOR_TERMINAL_FRAME, scrollbar_button_hover_color=COLOR_ACCENT)
+    app.threat_feed_scroll = ctk.CTkScrollableFrame(right_panel, fg_color=UI_CONSTANTS.COLOR_TERMINAL, corner_radius=6, width=240, scrollbar_button_color=UI_CONSTANTS.COLOR_TERMINAL_FRAME, scrollbar_button_hover_color=UI_CONSTANTS.COLOR_ACCENT)
     app.threat_feed_scroll.grid(row=2, column=0, sticky="nsew")
 
     # Cloud modunda bu metodu çağırmaya gerek yok, log_welcome_message gui_cloud'da yok
     if hasattr(app, 'log_welcome_message'):
-         app.log_welcome_message()
-         
+          app.log_welcome_message()
+          
     initialize_cards(app)

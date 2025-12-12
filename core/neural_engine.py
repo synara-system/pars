@@ -12,8 +12,9 @@ from typing import Dict, Any, Optional, List # List eklendi
 from .data_simulator import DataSimulator # DataSimulator import edildi
 
 # API İstekleri için Ustel Geri Çekilme (Exponential Backoff) Sabitleri
-MAX_RETRIES = 3
-INITIAL_BACKOFF = 2  # Saniye
+MAX_RETRIES = 5  # API limitine karşı daha dayanıklı.
+INITIAL_BACKOFF = 1  # İlk bekleme süresini kısaltır.
+CRITICAL_COOLDOWN_TIME = 30 # KRİTİK EKLENTİ: Tam 429 başarısızlığından sonra bekleme süresi (saniye)
 
 class NeuralEngine:
     """
@@ -21,6 +22,7 @@ class NeuralEngine:
     
     Google Gemini 2.5 Flash API kullanarak tespit edilen zafiyetler için
     ikinci bir göz (AI Verification) ve sömürü önerisi (Exploit Suggestion) sağlar.
+    Akıllı API Yönetimi: Sürekli 429 hatası alındığında kısa süreli (Circuit Breaker) cooldown uygular.
     """
     
     def __init__(self, logger_callback, api_key: str = ""):
@@ -33,6 +35,9 @@ class NeuralEngine:
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
         
         self.is_active = bool(self.api_key)
+        
+        # Devre Kesici (Circuit Breaker) Durumu
+        self.api_fail_cooldown_until = 0 # KRİTİK EKLENTİ: API'ye tekrar deneme yapmadan önce beklenecek zaman damgası
         
         if self.is_active:
             self.log("[NEURAL] Yapay Zeka Motoru (Gemini 2.5 Flash) AKTİF.", "SUCCESS")
@@ -64,7 +69,7 @@ class NeuralEngine:
         ai_response_text = await self._query_gemini(prompt, is_json=True)
         
         # KRİTİK KONTROL: Eğer yanıt bir hata mesajı içeriyorsa (örn: "API Hatası: 403"), simülasyona dön.
-        if ai_response_text.startswith("API Hatası:") or ai_response_text.startswith("Beklenmedik Hata:") or ai_response_text.startswith("Bağlantı Hatası:"):
+        if ai_response_text.startswith("API Hatası:") or ai_response_text.startswith("Beklenmedik Hata:") or ai_response_text.startswith("Bağlantı Hatası:") or ai_response_text.startswith("COOLDOWN"): # COOLDOWN hatası eklendi
             self.log(f"[NEURAL] KRİTİK YEDEK: API hatası ({ai_response_text[:15]}) nedeniyle simülasyon kullanılıyor.", "WARNING")
             return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
 
@@ -130,6 +135,14 @@ class NeuralEngine:
         """
         [RESILIENCE CORE] Google Gemini API'sine üstel geri çekilme ile istek atar.
         """
+        
+        # --- KRİTİK EKLENTİ: COOLDOWN KONTROLÜ (Circuit Breaker) ---
+        if time.time() < self.api_fail_cooldown_until:
+            wait_time = self.api_fail_cooldown_until - time.time()
+            self.log(f"[NEURAL] COOLDOWN: API Motoru {wait_time:.1f} saniye boyunca pasif (Rate Limit sonrası).", "WARNING")
+            return f"COOLDOWN: API Motoru beklemede ({wait_time:.1f}s)."
+        # -----------------------------------------------------------------
+
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": [{
@@ -164,6 +177,9 @@ class NeuralEngine:
                         
                         # 200 OK
                         if resp.status == 200:
+                            # Başarılı istekte cooldown durumunu sıfırla
+                            self.api_fail_cooldown_until = 0 
+                            
                             data = await resp.json()
                             try:
                                 # Gemini Response Parsing
@@ -188,6 +204,11 @@ class NeuralEngine:
                                 await asyncio.sleep(backoff_time)
                             else:
                                 # Son deneme başarısız
+                                # KRİTİK EKLENTİ: Tam 429 hatası durumunda Cooldown başlat
+                                if resp.status == 429:
+                                    self.api_fail_cooldown_until = time.time() + CRITICAL_COOLDOWN_TIME
+                                    self.log(f"[NEURAL] KRİTİK COOLDOWN BAŞLATILDI: 429 hatası nedeniyle {CRITICAL_COOLDOWN_TIME}s pasif kalacak.", "CRITICAL")
+
                                 return f"API Hatası: {resp.status}. Tüm denemeler başarısız."
                         
                         # Diğer Client Hataları (Retry Yok)

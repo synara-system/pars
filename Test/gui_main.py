@@ -11,7 +11,6 @@ import re
 import datetime
 import time
 import math # Animasyon hesaplamaları için
-# import queue # YENİ VERSİYONA AİT: KALDIRILDI
 from PIL import Image, ImageTk # YENİ: Resim ve İkon işlemleri için ImageTk eklendi
 
 # Global değişken: Gemini API anahtarını os.environ'dan kurtarır
@@ -59,8 +58,8 @@ from core.dynamic_script_manager import DynamicScriptManager
 from core.ai_analyst import AIAnalyst 
 
 # Alt modülleri import et
-# DÜZELTME: create_risk_pie_chart kaldırıldı, çünkü artık HUD kullanılıyor.
-from Test.gui_dashboard import setup_dashboard_tab, RichConsole, initialize_cards 
+# KRİTİK DÜZELTME 1: Döngüsel bağımlılığı kırmak için sadece modülü alias ile import et
+import Test.gui_dashboard as gui_dashboard_logic 
 from Test.gui_reports import setup_reports_tab 
 # YENİ: AI Analist Sekmesini import et
 from Test.gui_ai_analyst import setup_ai_analyst_tab, append_to_ai_console 
@@ -77,6 +76,10 @@ class NeonLoader(ctk.CTkFrame):
         super().__init__(master, width=width, height=height, fg_color="transparent")
         self.canvas = tk.Canvas(self, width=width, height=height, bg=bg_color, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
+        
+        # KRİTİK DÜZELTME: Renk sabitlerini init sırasında al
+        self.COLOR_ACCENT = color1 
+        self.COLOR_CYAN = color2
         
         self.color1 = color1
         self.color2 = color2
@@ -135,25 +138,27 @@ class NeonLoader(ctk.CTkFrame):
         fill_width = bar_w * self.progress_val
         if fill_width > 0:
             # Ana dolgu
-            self.canvas.create_line(x_start, cy, x_start + fill_width, cy, width=bar_h, fill=self.color2, capstyle="round")
+            # KRİTİK DÜZELTME: self.COLOR_CYAN kullanıldı
+            self.canvas.create_line(x_start, cy, x_start + fill_width, cy, width=bar_h, fill=self.COLOR_CYAN, capstyle="round")
             # Glow efekti (daha ince, daha parlak üst çizgi)
             self.canvas.create_line(x_start, cy, x_start + fill_width, cy, width=2, fill="white", capstyle="round")
             
             # Barın ucundaki "kafa" (Scanner Head)
             head_x = x_start + fill_width
-            self.canvas.create_oval(head_x - 5, cy - 5, head_x + 5, cy + 5, fill=self.color1, outline=self.color1)
+            # KRİTİK DÜZELTME: self.COLOR_ACCENT kullanıldı
+            self.canvas.create_oval(head_x - 5, cy - 5, head_x + 5, cy + 5, fill=self.COLOR_ACCENT, outline=self.COLOR_ACCENT)
             
             # --- 3. PARÇACIK EFEKTİ (PARTICLES) ---
             if self.is_running and len(self.particles) < 10 and self.progress_val < 1.0:
                 if int(time.time() * 100) % 5 == 0:
                     self.particles.append({'x': head_x, 'y': cy, 'vx': -2 - (self.progress_val * 5), 'life': 1.0})
-        
+            
         # Parçacıkları çiz ve güncelle
         new_particles = []
         for p in self.particles:
-            alpha = int(p['life'] * 255)
             size = 2 * p['life']
-            self.canvas.create_oval(p['x']-size, p['y']-size, p['x']+size, p['y']+size, fill=self.color2, outline="")
+            # KRİTİK DÜZELTME: self.COLOR_CYAN kullanıldı
+            self.canvas.create_oval(p['x']-size, p['y']-size, p['x']+size, p['y']+size, fill=self.COLOR_CYAN, outline="")
             p['x'] += p['vx']
             p['life'] -= 0.1
             if p['life'] > 0:
@@ -164,7 +169,8 @@ class NeonLoader(ctk.CTkFrame):
         percent_text = f"{int(self.progress_val * 100)}%"
         
         # Yüzde (Sağ Taraf)
-        self.canvas.create_text(x_end, cy - 15, text=percent_text, fill=self.color2, font=("Consolas", 14, "bold"), anchor="e")
+        # KRİTİK DÜZELTME: self.COLOR_CYAN kullanıldı
+        self.canvas.create_text(x_end, cy - 15, text=percent_text, fill=self.COLOR_CYAN, font=("Consolas", 14, "bold"), anchor="e")
         
         # Faz Bilgisi (Sol Taraf) - Büyük harf ve net font
         self.canvas.create_text(x_start, cy - 15, text=str(self.scan_phase_text).upper(), fill="white", font=("Orbitron", 10, "bold"), anchor="w")
@@ -187,7 +193,7 @@ class MestegApp(ctk.CTk):
         self.COLOR_BG = "#0b0c15"       # Deep Space Dark
         self.COLOR_SIDEBAR = "#141526"      # Nebula Dark
         self.COLOR_ACCENT = "#fa1e4e"       # Alert Red
-        self.COLOR_CYAN = "#00fff5"      # Cyber Cyan
+        self.COLOR_CYAN = "#00fff5"     # Cyber Cyan
         self.COLOR_PURPLE = "#a855f7"       # Neon Purple
         self.COLOR_SUCCESS = "#00e676"      # Success Green
         self.COLOR_ERROR = "#ff2a6d"        # Error Red
@@ -196,23 +202,17 @@ class MestegApp(ctk.CTk):
         self.COLOR_TERMINAL_FRAME = "#2d2e42" 
         self.COLOR_TEXT_SECONDARY = "#a0a0b5" 
         self.COLOR_HIGH_CVSS = "#ff6b00"    # Orange
-        self.COLOR_FLOW = "#00fff5"      # Flow
+        self.COLOR_FLOW = "#00fff5"     # Flow
         # -----------------------------------------------------------
 
         self.console = None 
         self.progress_lock = threading.Lock()
         
-        # YENİ VERSİYONA AİT: KALDIRILDI
-        # self.log_queue = queue.Queue()
-        # self._process_log_queue_id = None
-        
-        # --- MODÜL EŞLEŞTİRME HARİTASI KALDIRILDI ---
-        # Basit versiyonda kullanılmaz.
-        
         self.scanner_status_cards = {}
         self.module_status_frame = None 
         self.active_module_key = None 
         
+        # Faz 40: Güncellenecek risk sayımları ve HUD için ana durumlar
         self.risk_counts = {"CRITICAL": 0, "HIGH": 0, "WARNING": 0, "INFO": 0}
         self.chart_frame = None
         self.hud_panel = None 
@@ -264,7 +264,8 @@ class MestegApp(ctk.CTk):
         self.tab_ai_analyst = ctk.CTkFrame(self.main_content_area, fg_color="transparent")
 
         # Şimdi içerikleri doldur
-        setup_dashboard_tab(self) 
+        # KRİTİK DÜZELTME 1: Alias ile fonksiyon çağrısı
+        gui_dashboard_logic.setup_dashboard_tab(self) 
         
         # KRİTİK DÜZELTME: Butonu KİLİTLE ve perform_self_test'ten sonra AÇ
         if hasattr(self, 'btn_scan'):
@@ -278,9 +279,6 @@ class MestegApp(ctk.CTk):
         self.setup_dynamic_script_selector() 
         
         threading.Thread(target=self._check_for_updates, daemon=True).start()
-        
-        # YENİ: Log kuyruk işlemcisi kaldırıldı
-        # self._process_log_queue()
         
         # KRİTİK: Test akışını başlat (Butonu en sonunda enable yapacak)
         self.after(100, self.perform_self_test) # 100ms sonra başlat
@@ -311,11 +309,6 @@ class MestegApp(ctk.CTk):
     def setup_dynamic_script_selector(self):
         script_options = list(DynamicScriptManager.SCRIPT_PROFILES.keys())
         
-        if not hasattr(self, 'input_frame'):
-            input_container = self.tab_dashboard 
-        else:
-            input_container = self.input_bar
-        
         if not hasattr(self, 'input_bar'):
              return 
 
@@ -334,12 +327,6 @@ class MestegApp(ctk.CTk):
         )
         self.script_select_var.set("NO_AUTH") 
         self.script_select_menu.grid(row=0, column=5, padx=(0, 20), pady=15, sticky="w")
-        
-        # [MANUEL EXPLOIT BUTONU KALDIRILDI] - Eski versiyona sadık kalındı
-        # ctk.CTkButton(self.input_bar, text="MANUEL EXPLOIT", height=40, width=150, 
-        #               font=ctk.CTkFont(weight="bold", size=14), fg_color=self.COLOR_PURPLE, 
-        #               hover_color=self.COLOR_CYAN, text_color="white", corner_radius=6, 
-        #               command=self.run_manual_exploit_dialog).grid(row=0, column=6, padx=(10, 20), pady=15)
 
 
     def _resource_path(self, relative_path):
@@ -391,23 +378,23 @@ class MestegApp(ctk.CTk):
             print(f"UYARI: Logo bulunamadı: {image_path}")
             # Logo yoksa metin göster
             ctk.CTkLabel(logo_frame, text="PARS", font=ctk.CTkFont(family="Orbitron", size=32, weight="bold"), 
-                              text_color=self.COLOR_ACCENT).pack(anchor="center")
+                                     text_color=self.COLOR_ACCENT).pack(anchor="center")
         except Exception as e:
             print(f"HATA: {e}")
             ctk.CTkLabel(logo_frame, text="PARS", font=ctk.CTkFont(family="Orbitron", size=32, weight="bold"), 
-                              text_color=self.COLOR_ACCENT).pack(anchor="center")
+                                     text_color=self.COLOR_ACCENT).pack(anchor="center")
         # --- LOGO YÜKLEME SONU ---
 
         # [MARKALAMA] Logo altı metinleri - BÜYÜK ve NET
         ctk.CTkLabel(logo_frame, text="PARS", font=ctk.CTkFont(family="Orbitron", size=28, weight="bold"), 
-                             text_color="white").pack(anchor="center", pady=(5, 0))
-                             
+                                     text_color="white").pack(anchor="center", pady=(5, 0))
+                                     
         ctk.CTkLabel(logo_frame, text="SECURITY SYSTEM", font=ctk.CTkFont(family="Orbitron", size=12, weight="normal"), 
-                             text_color=self.COLOR_ACCENT).pack(anchor="center", pady=(0, 5))
+                                     text_color=self.COLOR_ACCENT).pack(anchor="center", pady=(0, 5))
 
         # Versiyon
         ctk.CTkLabel(sidebar, text="v1.0 ENTERPRISE", font=ctk.CTkFont(family="Consolas", size=10), 
-                             text_color=self.COLOR_TEXT_SECONDARY).grid(row=1, column=0, pady=(5, 20))
+                                     text_color=self.COLOR_TEXT_SECONDARY).grid(row=1, column=0, pady=(5, 20))
         
         # Durum Kutusu
         info_box = ctk.CTkFrame(sidebar, fg_color=self.COLOR_BG, corner_radius=8, border_width=1, border_color=self.COLOR_TERMINAL_FRAME)
@@ -415,7 +402,7 @@ class MestegApp(ctk.CTk):
         
         ctk.CTkLabel(info_box, text="SYSTEM STATUS", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.COLOR_TEXT_SECONDARY).pack(pady=(10,5))
         
-        self.lbl_status_dot = ctk.CTkLabel(info_box, text="● ONLINE", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.COLOR_SUCCESS)
+        self.lbl_status_dot = ctk.CTkLabel(info_box, text="● IDLE", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.COLOR_SUCCESS)
         self.lbl_status_dot.pack(pady=(0,10))
 
         # Navigasyon
@@ -423,50 +410,119 @@ class MestegApp(ctk.CTk):
         nav_label.grid(row=4, column=0, padx=20, pady=(20, 5), sticky="w") 
 
         self.btn_nav_dashboard = ctk.CTkButton(sidebar, text="🛡️ DASHBOARD", height=35, corner_radius=6,
-                                              font=ctk.CTkFont(size=12, weight="bold"),
-                                              fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
-                                              hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
-                                              command=lambda: self.select_tab("dashboard"))
+                                             font=ctk.CTkFont(size=12, weight="bold"),
+                                             fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
+                                             hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
+                                             command=lambda: self.select_tab("dashboard"))
         self.btn_nav_dashboard.grid(row=5, column=0, padx=15, pady=2, sticky="ew")
 
         self.btn_nav_reports = ctk.CTkButton(sidebar, text="📊 REPORTS", height=35, corner_radius=6,
-                                            font=ctk.CTkFont(size=12, weight="bold"),
-                                            fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
-                                            hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
-                                            command=lambda: self.select_tab("reports"))
+                                             font=ctk.CTkFont(size=12, weight="bold"),
+                                             fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
+                                             hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
+                                             command=lambda: self.select_tab("reports"))
         self.btn_nav_reports.grid(row=6, column=0, padx=15, pady=2, sticky="ew") 
 
         # [MARKALAMA DÜZELTMESİ] PARS AI -> SYNARA AI
         self.btn_nav_ai = ctk.CTkButton(sidebar, text="🧠 SYNARA AI", height=35, corner_radius=6,
-                                        font=ctk.CTkFont(size=12, weight="bold"),
-                                        fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
-                                        hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
-                                        command=lambda: self.select_tab("ai"))
+                                             font=ctk.CTkFont(size=12, weight="bold"),
+                                             fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
+                                             hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
+                                             command=lambda: self.select_tab("ai"))
         self.btn_nav_ai.grid(row=7, column=0, padx=15, pady=2, sticky="ew")
         
         ctk.CTkFrame(sidebar, fg_color="transparent", height=0).grid(row=8, column=0, sticky="nsew") 
 
         # [MARKALAMA] Alt İmza - Kurumsal
         ctk.CTkLabel(sidebar, text="SYNARA AI INTELLIGENCE\nGROUP", font=ctk.CTkFont(family="Orbitron", size=9), 
-                             text_color=self.COLOR_TEXT_SECONDARY).grid(row=9, column=0, pady=20)
+                                     text_color=self.COLOR_TEXT_SECONDARY).grid(row=9, column=0, pady=20)
 
     # --- HELPER METHODS ---
     
+    # Faz 40: Kart güncellemeyi ve risk sayımını tetikleyen ana log metodu
     def log_to_gui(self, message, level="INFO"):
-        """
-        [ESKİ VERSİYON] Logları doğrudan UI thread'inde yazar (Daha az karmaşık).
-        """
         if self.console is None:
             return
-        self.after(0, lambda: self.console.write_log(message, level))
         
-    # YENİ VERSİYONA AİT: KALDIRILDI
-    # def _process_log_queue(self):
-    #     pass
+        # Log mesajı bir SRP sonucu içeriyorsa (örneğin: "[LFI | SRP Düşüş: 15.0]"), kartı güncelle
+        match = re.search(r"^\[([A-Z_]+)(?: \| SRP Düşüş: ([\d.]+))?\]", message)
+        
+        if match:
+            category = match.group(1)
+            # Eğer SRP Düşüşü varsa (yani bir zafiyet bulunduysa)
+            if float(match.group(2) or 0) > 0:
+                # KRİTİK: Gerçek zamanlı risk sayımı
+                self.update_risk_counts_and_hud(level)
+            
+            # KRİTİK: Modül kartını güncelle (CRITICAL, HIGH, WARNING)
+            self.update_card_visual(category, level)
+        
+        self.after(0, lambda: self.console.write_log(message, level))
 
-    # YENİ VERSİYONA AİT: KALDIRILDI
-    # def _update_module_status_from_log(self, msg):
-    #     pass
+    def update_risk_counts_and_hud(self, level: str):
+        """
+        Faz 40: Risk sayımını günceller ve HUD panelini (ana risk göstergesi) tetikler.
+        Bu metod, log_to_gui içinden çağrılır.
+        """
+        # Sadece bilinen seviyeleri say
+        level = level.upper()
+        if level in self.risk_counts:
+            self.risk_counts[level] += 1
+        
+        # HUD Panelini güncelle (thread-safe after call)
+        if self.hud_panel:
+            self.after(0, lambda: self.hud_panel.update_stats(self.scanner.score, self.risk_counts))
+            
+    def update_card_visual(self, category: str, level: str):
+        """
+        Faz 40: Belirli bir modül kartının görünümünü bulgu seviyesine göre değiştirir.
+        """
+        # Kategori adını kart anahtarıyla eşleştir (e.g., LFI -> LFI)
+        card_key = category.upper()
+        
+        # Faz 41: Subdomain ve RCE'nin türevlerini ana anahtara eşitle
+        if card_key in ['SUBDOMAIN_TAKEOVER', 'SUBDOMAIN']:
+            card_key = 'SUBDOMAIN'
+        elif card_key in ['SSRF_RCE', 'RCE_SSRF']:
+            card_key = 'RCE_SSRF'
+        elif card_key in ['CLIENT_LOGIC', 'BUSINESS_LOGIC', 'HTTP_SMUGGLING', 'LEAKAGE', 'OSINT', 'REACT_EXPLOIT']:
+             # React Exploit kartını da burada koruyoruz
+             pass
+        else:
+             pass
+
+        if card_key not in self.scanner_status_cards:
+            return
+
+        card_data = self.scanner_status_cards[card_key]
+        
+        # Renk haritası
+        color_map = {
+            "CRITICAL": self.COLOR_ERROR,
+            "HIGH": self.COLOR_HIGH_CVSS,
+            "WARNING": self.COLOR_WARNING,
+            "SUCCESS": self.COLOR_SUCCESS,
+            "INFO": self.COLOR_CYAN,
+        }
+        
+        dot_color = color_map.get(level, self.COLOR_TEXT_SECONDARY)
+        
+        # ÇERÇEFE RENK MANTIĞI:
+        if level in ["CRITICAL", "HIGH", "WARNING"]:
+             frame_color = dot_color
+        elif level == "SUCCESS":
+             # Tarama bittiğinde yeşil nokta + koyu çerçeve
+             frame_color = self.COLOR_TERMINAL_FRAME 
+             dot_color = self.COLOR_SUCCESS
+        else:
+             # INFO/Varsayılan: Cyan nokta + koyu çerçeve (sönük görünümü engeller)
+             frame_color = self.COLOR_TERMINAL_FRAME
+             dot_color = self.COLOR_CYAN 
+
+        # KRİTİK ÇÖZÜM: 'dot' ve 'frame' güncelleniyor
+        self.after(0, lambda: card_data['dot'].configure(text="●", text_color=dot_color))
+        self.after(0, lambda: card_data['frame'].configure(border_color=frame_color))
+
 
     def append_to_ai_console(self, message: str, speaker: str):
         if self.ai_console:
@@ -491,9 +547,15 @@ class MestegApp(ctk.CTk):
         self.log_to_gui("-" * 60, "INFO")
         
     def _initialize_status_cards(self):
-        initialize_cards(self) 
+        """
+        Faz 40: Kartları sıfırlar ve ACTIVE/IDLE durumuna getirir.
+        """
+        # KRİTİK DÜZELTMESİ: initialize_cards'ı alias ile çağır
+        gui_dashboard_logic.initialize_cards(self) 
         
-        # Basit versiyonda Mapping gerekmez, doğrudan kartlar yüklenir.
+        # Faz 40: Kartları başlangıçta IDLE/INFO durumuna getir (Sönük olmasını engelle)
+        for key, card in self.scanner_status_cards.items():
+             self.update_card_visual(key, "INFO") 
         
         self.log_to_gui("Modules reset. Matrix loaded.", "INFO")
         self.risk_counts = {"CRITICAL": 0, "HIGH": 0, "WARNING": 0, "INFO": 0}
@@ -570,10 +632,6 @@ class MestegApp(ctk.CTk):
         if hasattr(self, 'terminal_outer_frame'):
             self.terminal_outer_frame.configure(border_color=new_color)
         self.glow_animation_id = self.after(100, self.animate_terminal_glow)
-        
-    # run_manual_exploit_dialog metodu eski versiyonda yok, kaldırıldı.
-    # def run_manual_exploit_dialog(self):
-    #     pass
 
     def start_scan_thread(self):
         url = self.entry_url.get().strip()
@@ -603,18 +661,18 @@ class MestegApp(ctk.CTk):
                 }
             ]
             
-        if hasattr(self, 'progress'): 
-            self.progress.grid_forget() 
-            
+        # Modül kartlarını tekrar sıfırla ve ACTIVE yap
+        self._initialize_status_cards() 
+
         if not hasattr(self, 'loader_animation') or self.loader_animation is None:
             # GÜNCELLENDİ: Loader boyutu ve konumu
+            # KRİTİK DÜZELTME: NeonLoader'a renk sabitlerini gönder
             self.loader_animation = NeonLoader(self.tab_dashboard, width=600, height=50, 
                                                color1=self.COLOR_ACCENT, color2=self.COLOR_CYAN, bg_color=self.COLOR_BG)
             self.loader_animation.grid(row=2, column=0, columnspan=3, pady=(0, 10))
         
         self.loader_animation.start()
 
-        self._initialize_status_cards()
         self.console.configure(state="normal")
         self.console.delete("1.0", "end")
         self.console.configure(state="disabled")
@@ -664,10 +722,10 @@ class MestegApp(ctk.CTk):
         self.lbl_status_dot.configure(text="● COMPLETED", text_color=self.COLOR_SUCCESS)
         
         self.log_to_gui(" ", "INFO")
-        self.log_to_gui("  ╔════════════════════════════════════════════════╗", "SUCCESS")
-        self.log_to_gui("  ║        SCAN SUCCESSFULLY COMPLETED             ║", "SUCCESS")
-        self.log_to_gui(f"  ║       Final Security Score: {score:.1f}/100          ║", "SUCCESS")
-        self.log_to_gui("  ╚════════════════════════════════════════════════╝", "SUCCESS")
+        self.log_to_gui("  ╔════════════════════════════════════════════════╗", "SUCCESS")
+        self.log_to_gui("  ║        SCAN SUCCESSFULLY COMPLETED             ║", "SUCCESS")
+        self.log_to_gui(f"  ║       Final Security Score: {score:.1f}/100           ║", "SUCCESS")
+        self.log_to_gui("  ╚════════════════════════════════════════════════╝", "SUCCESS")
         self.log_to_gui(" ", "INFO")
         
         msg = f"Scan Completed.\nSecurity Score: {score:.1f}/100"
@@ -684,17 +742,18 @@ class MestegApp(ctk.CTk):
             self.log_to_gui("PDF Report generation failed (wkhtmltopdf error).", "WARNING")
         
         if ai_analysis:
-            # KRİTİK DÜZELTME: self.scanner.score kullan
+            # KRİTİK DÜZELTMESİ: self.scanner.score kullan
             self.append_to_ai_console(f"--- ANALYZED RESULT: {self.scanner.target_url} ---\nScore: {self.scanner.score:.1f}/100\n{ai_analysis}", "AI_INFO")
         else:
              # [MARKALAMA DÜZELTMESİ] PARS AI -> SYNARA AI
              self.append_to_ai_console(f"--- TARAMA TAMAMLANDI ---\nSkor: {score:.1f}/100\nAnaliz için 'SYNARA AI' sekmesindeki 'RAPORU YORUMLA' butonunu kullanın.", "AI_INFO")
-              
+             
         if self.hud_panel:
+            # Son skor ve risk sayımını HUD'a geçir
             self.hud_panel.update_stats(self.scanner.score, self.risk_counts)
         
         if html_file or pdf_file: self.refresh_reports()
-              
+             
         messagebox.showinfo("PARS Security", msg)
 
     def run_manual_analysis(self):
@@ -739,8 +798,9 @@ class MestegApp(ctk.CTk):
             except OSError as e:
                 self.log_to_gui(f"[REPORTS] ERROR: Could not delete report: {e}", "CRITICAL")
                 messagebox.showerror("Error", f"Could not delete: {e}")
-                
+            
     def update_risk_chart(self, level):
+        # Bu fonksiyon artık kullanılmıyor, yerine update_risk_counts_and_hud kullanılıyor.
         if level in self.risk_counts:
             self.risk_counts[level] += 1
 
@@ -793,7 +853,7 @@ class MestegApp(ctk.CTk):
                  results=[{"category": "CHAT", "level": "INFO", "cvss_score": 0.0, "message": chat_prompt}], 
                  final_score=self.scanner.score,
                  api_key=_GEMINI_API_KEY
-            )
+             )
             
             self.after(0, lambda: self._complete_chat_gui(ai_response))
             
@@ -802,7 +862,9 @@ class MestegApp(ctk.CTk):
     def _complete_chat_gui(self, ai_response):
          # GUI thread'inde çalışır
          self.append_to_ai_console(ai_response, "AI")
-         self.btn_scan.configure(state="normal")
+         # Tarama dışındaki işlemlerde ana butonu tekrar normal yap
+         if not self.is_scanning:
+            self.btn_scan.configure(state="normal")
          self.entry_ai_chat.configure(state="normal")
         
     def perform_self_test(self):
@@ -811,24 +873,23 @@ class MestegApp(ctk.CTk):
         def _test_sequence():
             # initialize_cards'ın çağrılması için GUI'nin hazır olması beklenir.
             if not self.scanner_status_cards:
-                self.after(50, self._initialize_status_cards)
+                # KRİTİK DÜZELTME 3: initialize_cards'ı alias ile çağır
+                self.after(50, self._initialize_status_cards) 
                 time.sleep(0.1)
 
             if not self.scanner_status_cards:
                 return
 
             for key, card in self.scanner_status_cards.items():
-                time.sleep(0.15) 
+                time.sleep(0.05) # Hızlandırıldı
                 
                 # Önce Sarı (Checking)
-                card['dot'].configure(text="●", text_color=self.COLOR_WARNING)
-                card['frame'].configure(border_color=self.COLOR_WARNING)
+                self.after(0, lambda k=key: self.update_card_visual(k, "WARNING"))
                 
-                time.sleep(0.15)
+                time.sleep(0.05) # Hızlandırıldı
                 
                 # Sonra Yeşil (Online)
-                card['dot'].configure(text="●", text_color=self.COLOR_SUCCESS)
-                card['frame'].configure(border_color=self.COLOR_TERMINAL_FRAME) 
+                self.after(0, lambda k=key: self.update_card_visual(k, "SUCCESS"))
                 
                 self.log_to_gui(f"Module loaded: {key} ... [OK]", "INFO")
                 

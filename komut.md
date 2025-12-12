@@ -5,7 +5,7 @@ pip install customtkinter requests Jinja2
 pip install selenium webdriver-manager
 pip install pillow
 
-
+https://freelade.com/
 
 
 SaaS Kurulum

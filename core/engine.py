@@ -120,6 +120,9 @@ BURST = 10.0
 MAX_THROTTLE_WAIT_TIME = 2.5 # KRİTİK DÜZELTME: 1.5'tan 2.5'a çıkarıldı.
 # ------------------------------------------------------
 
+# --- FAZ 40: AKILLI AI KUYRUK SABİTLERİ ---
+AI_QUEUE_QPS = 1.0 # Neural Engine API'ye saniyede maksimum 1 istek atsın
+# ------------------------------------------
 
 # Faz 10: Tanımlanmış Tarama Profilleri
 SCAN_PROFILES = {
@@ -217,6 +220,11 @@ class SynaraScannerEngine:
         # API anahtarını çevre değişkeninden veya gui_main.py'den alacak
         # Şimdilik boş bırakıyoruz, kullanıcı GUI'den girmeli veya .env'den okumalı
         self.neural_engine = NeuralEngine(self.log)
+        
+        # --- FAZ 40 KRİTİK EKLENTİ: AI İstek Kuyruğu ---
+        self.ai_request_queue: asyncio.Queue = asyncio.Queue()
+        self.ai_queue_task: Optional[asyncio.Task] = None
+        # ----------------------------------------------
 
         # Faz 10: Yapılandırma değişkenleri
         self.config_profile = config_profile
@@ -284,9 +292,6 @@ class SynaraScannerEngine:
     # --- HEADLESS HELPER FUNCTIONS ---
     def _headless_log(self, message, level="INFO"):
         """GUI olmayan ortamlar için varsayılan log fonksiyonu."""
-        # Burada gerekirse dosyaya yazma veya stdout yapılabilir.
-        # Server modunda bu, API tarafından override edilir.
-        # print(f"[{level}] {message}") 
         pass
 
     def _headless_progress(self, val):
@@ -396,31 +401,24 @@ class SynaraScannerEngine:
 
     def _recalculate_score(self):
         """
-        PUANLAMA ALGORİTMASI V3.0 (Gerçeklik Düzeni)
+        FAZ 38: PUANLAMA ALGORİTMASI V4.0 (Multi-Layer Scoring)
+        Modül başına tek düşüş kuralı (add_result içinde SRP=0.0 olarak ayarlandığı için)
+        artık burada sadece skorları toplar.
         """
-
         total_deduction = 0.0
-        deductions_applied = set()
 
         for res in self.results:
-            category = res['category']
-
-            # PORT_SCAN için özel kural (Her kritik port için ceza)
-            if category == "PORT_SCAN" and res['cvss_score'] > 0:
+            # Sadece pozitif SRP değeri olan sonuçları topla (PORT_SCAN dahil)
+            if res['cvss_score'] > 0:
                 total_deduction += res['cvss_score']
-
-            # Diğer Modüller için normal kural (Modül başına bir kez)
-            elif category in self.MODULE_WEIGHTS and category not in ["PORT_SCAN", "SYSTEM"]:
-                total_deduction += res['cvss_score']
-                deductions_applied.add(category)
 
         # Skoru hesapla ve 0-100 arasında sınırla
         self.score = max(0.0, 100.0 - total_deduction)
 
     def add_result(self, category: str, level: str, message: str, cvss_score: float, poc_data: Optional[Dict[str, Any]] = None):
         """
-        Faz 10: Tarayıcı modüllerinden gelen sonuçları ana listeye ekler ve skoru CVSS/SRP'ye göre günceller.
-        Faz 18: poc_data parametresi ile otomatik POC raporu ve cURL komutu üretir.
+        Faz 38: Tarayıcı modüllerinden gelen sonuçları ana listeye ekler, skoru CVSS/SRP'ye göre günceller ve
+        kritik bulgular için AI Derin Analizini tetikler.
         """
 
         # --- KRİTİK FAZ 7: ML-FP KONTROLÜ ---
@@ -445,44 +443,58 @@ class SynaraScannerEngine:
             srp_deduction = 0.0
 
         # --- BÜYÜK ÖLÇEKLİ ORTAM FİLTRESİ (HYPERSCALE) ---
-        # Bu filtre artık genel koruma listesinden sonra, sadece hassas zafiyetler için çalışır.
         is_google = "google.com" in self.target_url.lower() or "gmail.com" in self.target_url.lower()
-        is_time_based_sqli = category == "SQLi" and "Time-Based SQLi" in message
+        is_time_based_sqli = category == "SQLI" and "Time-Based SQLi" in message # DÜZELTME: SQLi kategorisi kullanıldı
         is_idor = category == "IDOR" and original_score > 0
 
         if is_google and (is_time_based_sqli or is_idor):
-            if is_time_based_sqli or is_idor:
-                level = "INFO"
-                srp_deduction = 0.0
-                message += " [UYARI: HYPERSCALE FİLTRESİ AKTİF. Güvenilirlik 0.0'a düşürüldü.]"
+            level = "INFO"
+            srp_deduction = 0.0
+            message += " [UYARI: HYPERSCALE FİLTRESİ AKTİF. Güvenilirlik 0.0'a düşürüldü.]"
 
         # KRİTİK SRP V2.1: Modül başına bir kez düşüş kuralı
         # PORT_SCAN ve SYSTEM dışındaki modüller için normal kuralı uygula
         if category in self.MODULE_WEIGHTS and category not in ["PORT_SCAN", "SYSTEM"]:
-            # DÜZELTME 1: RCE_SSRF'den gelen bulguların 'SSRF_RCE' olarak gelme ihtimaline karşı tutarlı kategori adı kullanılıyor.
-            # Şu anki yapı, scanner.category'nin doğru olduğunu varsayar.
             if srp_deduction > 0.0 and self.module_deduction_tracker.get(category, False):
                 srp_deduction = 0.0  # Zaten düşülmüş, tekrar düşme
             elif srp_deduction > 0.0:
                 self.module_deduction_tracker[category] = True  # İlk kez düşüldü olarak işaretle
 
-        # PORT_SCAN için özel mantık (Düzeltme 4: SRP değeri artık 5.0 olduğu için basitleştirildi)
-        elif category == "PORT_SCAN":
-            # Port taraması her zaman SRP'yi doğrudan kullanır (Zaten PortScanner'ın kendisi ayarlamıştır).
+        # PORT_SCAN ve SYSTEM mantığı (cvss_score'u doğrudan kullanır, SRP sadece referanstır)
+        elif category in ["PORT_SCAN", "SYSTEM"]:
             pass
-            # Eski karmaşık port logic'i kaldırıldı, sadece SRP skoruna güveniyoruz.
             
-
         # FAZ 11 KRİTİK: Exploit önerisi ekle
         exploit_suggestion = ""
         if original_level in ["CRITICAL", "HIGH", "CHAINING_CRITICAL"] and self.exploit_manager:
             exploit_suggestion = self.exploit_manager.generate_exploit_suggestion(
                 {'category': category, 'level': original_level, 'cvss_score': original_score}
             )
-            if level != original_level and exploit_suggestion:
+            # Eğer HYPERSCALE filtresi devreye girdiyse, öneriyi filtrele
+            if level == "INFO" and exploit_suggestion:
                 exploit_suggestion = "[Exploit önerisi filtrelendi: Büyük ölçekli ortamda manuel doğrulama gerekli.]"
             elif exploit_suggestion and "Otomatik sömürü önerisi bulunamadı." not in exploit_suggestion:
                 message += f" [Exploit Önerisi: {exploit_suggestion}]"
+
+
+        # --- FAZ 38: KRİTİK AI ANALİZ TETİKLEME ---
+        critical_ai_categories = ["RCE_SSRF", "CLOUD_EXPLOIT", "LEAKAGE", "REACT_RCE", "HTTP_SMUGGLING", "INTERNAL_SCAN", "SQLI", "AUTH_BYPASS"]
+        
+        if self.neural_engine.is_active and category in critical_ai_categories and original_level in ["CRITICAL", "HIGH"]:
+            if self.exploit_manager:
+                vuln_data_for_ai = {
+                    "category": category,
+                    "level": original_level,
+                    "message": message,
+                    "url": poc_data.get('url', self.target_url) if poc_data else self.target_url
+                }
+                # Exploit Manager'a AI analizini yeni bir thread'de başlatması için talimat ver
+                self.run_manual_exploit("CRITICAL_AI_ANALYSIS", json.dumps(vuln_data_for_ai))
+                message += " [AI DERİN ANALİZ BAŞLATILDI]"
+            else:
+                 message += " [AI Analiz Motoru Hazır Değil.]"
+        # -----------------------------------------
+
 
         # YENİ FAZ 18: AUTO-POC VE RAPORLAMA MOTORU
         generated_poc_report = None
@@ -510,12 +522,6 @@ class SynaraScannerEngine:
             except Exception as e:
                 self.log(f"[{category}] POC oluşturma hatası: {e}", "WARNING")
 
-        # YENİ: Neural Engine Analizi (Sadece Kritik Bulgular İçin)
-        if self.neural_engine.is_active and original_level in ["CRITICAL", "HIGH"]:
-            # AI Analizini arka planda başlat (Asenkron olmadığı için burada blocking olmasın diye thread veya basitçe log)
-            # Not: Tam asenkron entegrasyon için add_result'ın async olması gerekirdi.
-            # Şimdilik "Sonraki Adım" olarak not düşüyoruz.
-            message += " [AI Analizi Bekleniyor...]"
 
         self.results.append({
             "category": category,
@@ -541,9 +547,89 @@ class SynaraScannerEngine:
         self.stop_requested = True
         self.proxy_manager.stop_updater()
         
+        # FAZ 40: AI Worker'ı iptal et
+        if self.ai_queue_task:
+            self.ai_queue_task.cancel()
+            self.log("[NEURAL] AI Kuyruk İşçisi (Worker) iptal edildi.", "INFO")
+        
         # FAZ 26: Thread havuzunu kapat
         self.log("[PERFORMANS] Thread Pool Executor kapatılıyor...", "INFO")
         self.thread_executor.shutdown(wait=False)
+
+    async def _ai_queue_worker(self):
+        """
+        [FAZ 40] AI İstek Kuyruğunu yöneten asenkron işçi. 
+        Saniyede AI_QUEUE_QPS hızını aşmayacak şekilde istekleri tüketir.
+        """
+        self.log(f"[NEURAL] AI Kuyruk İşçisi başlatıldı (Hız: {AI_QUEUE_QPS} QPS).", "SUCCESS")
+        
+        try:
+            while not self.stop_requested:
+                # Kuyruktan isteği al (payload_generator'dan gelir)
+                # İstek yapısı: (context_data, vulnerability_type, count, future_obj)
+                item = await self.ai_request_queue.get()
+                context_data, vuln_type, count, future_obj = item
+                
+                self.log(f"[NEURAL] Kuyruktan AI isteği çekildi ({vuln_type}, Kalan: {self.ai_request_queue.qsize()}).", "INFO")
+
+                # 1. Neural Engine'i Çağır
+                # generate_ai_payloads, artık Devre Kesici ve Backoff ile API'yi çağıracak.
+                try:
+                    payloads = await self.neural_engine.generate_ai_payloads(context_data, vuln_type, count)
+                    # Sonucu Future objesine set et
+                    if not future_obj.done():
+                        future_obj.set_result(payloads)
+                except Exception as e:
+                    self.log(f"[NEURAL] KRİTİK HATA: AI Payload üretimi başarısız oldu: {e}", "CRITICAL")
+                    # Başarısızlık durumunda DataSimulator'dan mock verileri döndür
+                    if not future_obj.done():
+                        future_obj.set_result(DataSimulator.simulate_ai_payloads(vuln_type, count))
+                    
+                self.ai_request_queue.task_done()
+
+                # 2. Hız Sınırlaması (QPS) Uygula
+                sleep_time = 1.0 / AI_QUEUE_QPS
+                await asyncio.sleep(sleep_time)
+
+        except asyncio.CancelledError:
+            self.log("[NEURAL] AI Kuyruk İşçisi (Worker) iptal sinyali aldı.", "WARNING")
+        except Exception as e:
+            self.log(f"[NEURAL] İşçi beklenmedik hata verdi: {e}", "CRITICAL")
+        
+        self.log("[NEURAL] AI Kuyruk İşçisi durduruldu.", "WARNING")
+
+
+    async def queue_ai_payload_request(self, context_data: Dict[str, Any], vulnerability_type: str, count: int = 5) -> List[str]:
+        """
+        [FAZ 40] PayloadGenerator tarafından çağrılan yeni arayüz. 
+        AI Payload isteğini kuyruğa atar ve sonucu bekler.
+        """
+        if not self.neural_engine.is_active:
+            self.log("[PAYLOAD GOV] AI pasif. Simüle payload kullanılıyor.", "WARNING")
+            return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
+
+        # Sonucun geleceği asenkron Future objesini oluştur
+        future_result = asyncio.get_running_loop().create_future()
+        
+        # İsteği kuyruğa ekle
+        await self.ai_request_queue.put((context_data, vulnerability_type, count, future_result))
+        
+        self.log(f"[PAYLOAD GOV] AI Payload isteği sıraya eklendi ({vulnerability_type}, Kuyruk: {self.ai_request_queue.qsize()}).", "INFO")
+        
+        # Sonucu bekle (Bu asenkron çağrıyı engeller)
+        try:
+            # KRİTİK NOT: Normal tarama süresine uygun bir zaman aşımı koymalıyız. 
+            # AI yanıtı 30 saniye sürüyorsa ve kuyrukta bekleme varsa bu artabilir.
+            # Şimdilik kilitlenmeyi önlemek için yüksek bir limit kullanalım.
+            payloads = await asyncio.wait_for(future_result, timeout=40.0) 
+            return payloads
+        
+        except asyncio.TimeoutError:
+            self.log("[PAYLOAD GOV] HATA: AI Kuyruk Zaman Aşımı (40.0s). Simüle payload kullanılıyor.", "CRITICAL")
+            return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
+        except Exception as e:
+            self.log(f"[PAYLOAD GOV] HATA: AI Kuyruk İletişim Hatası ({e}). Simüle payload kullanılıyor.", "CRITICAL")
+            return DataSimulator.simulate_ai_payloads(vulnerability_type, count)
 
     async def _run_calibration_scan(self, session, url):
         """
@@ -716,12 +802,12 @@ class SynaraScannerEngine:
 
         # 1. KRİTİK ZİNCİR: LFI/SSRF + RCE/Files
         lfi_or_ssrf_found = any(
-            res['category'] in ['LFI', 'SSRF_RCE'] and res['level'] == 'CRITICAL'
+            res['category'] in ['LFI', 'RCE_SSRF'] and res['level'] == 'CRITICAL'
             for res in self.results
         )
 
         rce_or_file_found = any(
-            (res['category'] == 'SSRF_RCE' and 'RCE Tespiti!' in res['message']) or
+            (res['category'] == 'RCE_SSRF' and 'RCE Tespiti!' in res['message']) or
             (res['category'] == 'FILES' and res['level'] == 'CRITICAL')
             for res in self.results
         )
@@ -733,7 +819,7 @@ class SynaraScannerEngine:
         # 3. YENİ ZİNCİR: Heuristic Reflection + XSS Payload
         # Heuristic Scanner'ın reflection_info'sunu al (main_scanners listesi içinde bulmalıyız)
         heuristic_scanner = next((s for s in self._main_scanners if s.category == 'HEURISTIC'), None)
-        is_heuristic_reflected = heuristic_scanner and heuristic_scanner.reflection_info.get("is_reflected")
+        is_heuristic_reflected = heuristic_scanner and hasattr(heuristic_scanner, 'reflection_info') and heuristic_scanner.reflection_info.get("is_reflected")
         
         xss_found_critical = any(res['category'] == 'XSS' and res['level'] == 'CRITICAL' for res in self.results)
         
@@ -890,7 +976,8 @@ class SynaraScannerEngine:
             self.dynamic_scanner = None
         
         # FAZ 29 KRİTİK: Payload Generator'ı Neural Engine ile başlat
-        self.payload_generator = PayloadGenerator(self.neural_engine)
+        # FAZ 40 DÜZELTME: PayloadGenerator artık Engine (self) üzerinden kuyruk sistemini kullanıyor.
+        self.payload_generator = PayloadGenerator(self)
         self.log("[CONFIG] Payload Generator, Neural Engine ile başlatıldı (FAZ 29).", "INFO")
 
         available_scanners = {
@@ -970,10 +1057,11 @@ class SynaraScannerEngine:
                 # --- PROJECT NEURAL (V23.0) ---
                 setattr(scanner_instance, 'neural_engine', self.neural_engine)
                 
-                # --- FAZ 29: PAYLOAD GENERATOR ENJEKSİYONU ---
-                # Tarayıcıların artık PayloadGenerator'ın yeni AI özelliklerini kullanmasını sağla
+                # --- FAZ 40: PAYLOAD GENERATOR'A KUYRUK ENJEKSİYONU ---
+                # Payload Generator'ın Engine üzerindeki kuyruk metodunu kullanmasını sağla
+                # Not: Payload Generator'ın kendisi zaten _load_scanners içinde başlatıldı.
+                # Tarayıcılara Payload Generator'ı enjekte etmeden önce, Payload Generator'ı Engine'e bağlayın.
                 setattr(scanner_instance, 'payload_generator', self.payload_generator)
-
 
                 # FAZ 26: Thread Executor'ı sadece Senkron Modüllere enjekte et (PortScanner)
                 if module_name == 'PORT_SCAN':
@@ -981,7 +1069,7 @@ class SynaraScannerEngine:
                     self.log(f"[CONFIG] {module_name} Thread Executor'a bağlandı.", "INFO")
 
                 # SUBDOMAIN_TAKEOVER bir keşif modülüdür, pre_scanners'a ekle
-                if module_name in ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'JS_ENDPOINT', 'CLIENT_LOGIC', 'OSINT', 'LEAKAGE']:  # YENİ: LEAKAGE de bir keşif/bilgi modülüdür
+                if module_name in ['WAF_DETECT', 'SUBDOMAIN', 'SUBDOMAIN_TAKEOVER', 'PRE_SCAN', 'JS_ENDPOINT', 'CLIENT_LOGIC', 'OSINT', 'LEAKAGE']: # YENİ: LEAKAGE de bir keşif/bilgi modülüdür
                     self._pre_scanners.append(scanner_instance)
                 else:
                     self._main_scanners.append(scanner_instance)
@@ -1003,6 +1091,9 @@ class SynaraScannerEngine:
         
         # PROXY MOTORUNU BAŞLAT (Eğer enabled ise)
         proxy_task = asyncio.create_task(self.proxy_manager.start_updater())
+        
+        # --- FAZ 40: AI KUYRUK İŞÇİSİNİ BAŞLAT ---
+        self.ai_queue_task = asyncio.create_task(self._ai_queue_worker())
 
         # --- AŞAMA 0: DİNAMİK SCRIPT YÜRÜTME ---
         final_url = url
@@ -1198,6 +1289,11 @@ class SynaraScannerEngine:
             self.proxy_manager.stop_updater()
             if self.dynamic_scanner:
                 self.dynamic_scanner.stop_dynamic_scan()
+            # FAZ 40: AI Worker'ı durdur (Eğer run_until_complete'den önce hata olursa)
+            if self.ai_queue_task:
+                self.ai_queue_task.cancel()
+                self.log("[NEURAL] AI Kuyruk İşçisi (Worker) durduruldu.", "INFO")
+
 
         return self.score
 
@@ -1222,6 +1318,7 @@ class SynaraScannerEngine:
             return
 
         def exploit_task():
+            # Exploit Data artık JSON stringi olabilir (FAZ 38 için vuln_data'yı taşır)
             self.exploit_manager.execute_manual_exploit(self.target_url, exploit_type, exploit_data)
 
         threading.Thread(target=exploit_task, daemon=True).start()
@@ -1319,6 +1416,10 @@ class SynaraScannerEngine:
             self.thread_executor.shutdown() # FAZ 26: Thread havuzunu kapat
             if self.dynamic_scanner:
                 self.dynamic_scanner.stop_dynamic_scan()
+            # FAZ 40: AI Worker'ı durdur (Eğer run_until_complete'den önce hata olursa)
+            if self.ai_queue_task:
+                self.ai_queue_task.cancel()
+                self.log("[NEURAL] AI Kuyruk İşçisi (Worker) durduruldu.", "INFO")
 
         return self.score
 

@@ -12,14 +12,15 @@ from core.scanners.base_scanner import BaseScanner
 
 class PreScanner(BaseScanner):
     """
-    Deep Vision v3.2 – Parametre Keşfi (Pro Optimize + Susturucu v1.1)
-    - Parametre kaynağı tespiti (HTML / JS / JSON)
-    - Semantic Noise Filter (CSS & HTML otomatik gürültü temizleme)
-    - Parametre sınıflandırma: STRUCTURAL / BEHAVIORAL / SECURITY-SENSITIVE / LOW
-    - Mutability Analyzer: Parametre değiştirilebilir mi?
-    - TR-GUARD: Türkçe ve ASCII olmayan kelimeleri filtreleme.
+    Deep Vision v3.3 – Hibrit Parametre Keşfi (Modern + Legacy)
+    
+    YENİLİKLER (v3.3):
+    - Legacy Form Hunter: Eski tip <form> ve <input> yapılarını garantili tespit eder.
+    - Deep Vision v3.2: Modern (JSON/JS) parametre keşfini korur.
+    - TR-GUARD & Noise Filter: Gürültü temizleme özelliği aktif.
     """
 
+    # Modern JS/HTML attribute regex'i (React props, Angular directives vb. için)
     PARAM_PATTERN = re.compile(
         r'(?:name|id|ng-model|v-model)=["\']?([a-zA-Z0-9_\-]+)["\']?|'     # HTML attr
         r'["\']?([a-zA-Z0-9_\-]+)["\']?\s*:',                              # JS/JSON key
@@ -27,12 +28,11 @@ class PreScanner(BaseScanner):
     )
 
     # Anahtar kelime grupları
-    SECURITY_HINT = {"token", "session", "auth", "key", "secret", "uid", "user"}
-    STRUCTURAL_HINT = {"id", "file", "path", "page", "index"}
-    BEHAVIORAL_HINT = {"search", "query", "filter", "sort", "event"}
+    SECURITY_HINT = {"token", "session", "auth", "key", "secret", "uid", "user", "pass", "pwd", "login"}
+    STRUCTURAL_HINT = {"id", "file", "path", "page", "index", "view"}
+    BEHAVIORAL_HINT = {"search", "query", "filter", "sort", "event", "submit", "btn"}
 
-    # KRİTİK GÜNCELLEME: Next.js/Vercel/CSS/SVG gürültüsünü filtreleyen genişletilmiş set
-    # v1.1 EKLENTİSİ: Türkçe UI kelimeleri eklendi.
+    # Gürültü Filtresi (Static Noise + TR Guard)
     STATIC_NOISE = {
         "class", "style", "type", "value", "placeholder", "href", "src",
         "width", "height", "rel", "media", "charset", "name", "id",
@@ -55,12 +55,13 @@ class PreScanner(BaseScanner):
         "dark", "light", "md", "sm", "lg", "xl", "r1tcm", 
         "apple-mobile-web-app-capable", "apple-mobile-web-app-status-bar-style",
         "apple-mobile-web-app-title", "next-size-adjust", "group-hover",
+        "div", "span", "label", "form", "input", "body", "html", "head", "meta",
         
         # RainbowKit / CSS Variables Prefix'leri
         "rs", "rk", "paint0", "mask0", "filter1", "radix-", "-trigger-radix-",
         "-content-radix-", "-webkit-backdrop-filter",
 
-        # [v1.1] TÜRKÇE KELİMELER / UI METİNLERİ (False Positive Filtresi)
+        # TÜRKÇE KELİMELER / UI METİNLERİ (False Positive Filtresi)
         "varız", "satın", "tıkayın", "disiplini", "katkısı", "sinyal", 
         "analiz", "altyapısı", "payı", "veresiye", "hakkımızda", "iletişim", 
         "giriş", "kayıt", "sepet", "ara", "menü", "kapat", "devam", "iptal", 
@@ -74,7 +75,7 @@ class PreScanner(BaseScanner):
 
     @property
     def name(self):
-        return "Gelişmiş Parametre Keşfi (Deep Vision v3.2)"
+        return "Gelişmiş Parametre Keşfi (Deep Vision v3.3 + Legacy Hunter)"
 
     @property
     def category(self):
@@ -103,83 +104,58 @@ class PreScanner(BaseScanner):
         return "LOW"
 
     # ----------------------------------------------------------------------
-    # MUTABILITY CHECK (Parametre gerçekten değiştirilebilir mi?)
+    # MUTABILITY CHECK
     # ----------------------------------------------------------------------
     def _is_mutable(self, p: str) -> bool:
-        """
-        Değiştirilebilir parametreler:
-        - GET parametresi olma ihtimali yüksek olan kelimeler
-        - Form input isimleri
-        """
-        # KRİTİK: Mutability check'ten önce FP'leri elemeliyiz.
         if not self._is_valid_param(p):
             return False 
 
         p = p.lower()
-
-        # Çok küçük isimler risklidir
         if len(p) <= 2 and p not in self.SECURITY_HINT:
             return False
 
-        # Güvenlik/structural parametreler genelde değiştirilebilir
-        if any(k in p for k in self.SECURITY_HINT | self.STRUCTURAL_HINT):
-            return True
-
-        return True  # diğerleri için varsayılan: evet
+        return True
 
     # ----------------------------------------------------------------------
-    # PARAMETRE VALİDASYON (YENİ FP FİLTRESİ v1.1)
+    # PARAMETRE VALİDASYON
     # ----------------------------------------------------------------------
     def _is_valid_param(self, p: str) -> bool:
         if not p:
             return False
             
-        # 1. [YENİ] ASCII Kontrolü (Türkçe karakter filtresi)
-        # Parametre anahtarları teknik olarak %-encoded olabilir ancak
-        # raw string içinde 'ş','ğ','ı' gibi karakterler varsa bu %99.9 UI metnidir.
         if not p.isascii():
             return False
 
         p_lower = p.lower()
 
-        # 2. Uzunluk Kontrolü (Çok kısa veya çok uzunsa atla)
         if len(p) < 2 or len(p) > 50:
-             # İzin verilen kısa güvenlik anahtarlarını kontrol et (örn: q=search)
-             if p_lower not in ["id", "uid", "key", "q"]:
+             if p_lower not in ["id", "uid", "key", "q", "p"]:
                  return False
 
-        # 3. Statik Gürültü Kontrolü (Türkçe kelimeler dahil)
         if p_lower in self.STATIC_NOISE:
             return False
             
-        # 4. CSS Değişkeni/SVG ID ve Framework Prefix Kontrolü
         if p.startswith(('--', 'rs-', 'rk-', 'clip', 'mask', 'filter', 'paint', 'radix-', '-')): 
              return False
              
-        # 5. Anlamsız Kısa Tekrarlayan Key'ler (n4f, n20, n3c)
         if len(p) <= 3 and re.match(r"^[a-zA-Z]{1}\d+$", p_lower):
             return False
             
-        # 6. Harf-Rakam karışımı ve Anlamsız (Random id'ler) filtresi
-        # Eğer parametre adı 3-5 karakter uzunluğunda VE sadece harf-rakam karışımı ise 
-        # VE içinde bilinen bir ipucu (id, key vb.) yoksa atla.
         if 3 <= len(p) <= 5 and re.match(r"^[a-z0-9]+$", p_lower) and not any(k in p_lower for k in self.SECURITY_HINT | self.STRUCTURAL_HINT):
              return False
 
-        # 7. Boşluk Kontrolü (Parametre anahtarlarında boşluk olmaz)
         if " " in p:
             return False
 
         return True
 
-
     # ----------------------------------------------------------------------
     # ANA TARAYICI
     # ----------------------------------------------------------------------
     async def scan(self, url: str, session: aiohttp.ClientSession, completed_callback: Callable[[], None]):
-        self.log(f"[{self.category}] Deep Vision v3.2 parametre analizi başlatıldı...", "INFO")
+        self.log(f"[{self.category}] Deep Vision v3.3 analizi başlatıldı...", "INFO")
 
-        discovered: Dict[str, Dict[str, str]] = {}  # {param: {level, source, mutable}}
+        discovered: Dict[str, Dict[str, str]] = {}
 
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -189,45 +165,40 @@ class PreScanner(BaseScanner):
                     content_type = res.headers.get("Content-Type", "").lower()
                     text = await res.text()
 
-                    # ----------------------------------------------------
-                    # JSON ANALİZİ (Next.js __NEXT_DATA__ gibi)
-                    # ----------------------------------------------------
+                    # 1. HTML FORM ANALİZİ (Legacy Hunter)
+                    # Regex'in kaçırabileceği <input> alanlarını özel olarak tarar.
+                    self._extract_html_forms(text, discovered)
+
+                    # 2. JSON ANALİZİ (Modern Apps)
                     if "application/json" in content_type or "__NEXT_DATA__" in text:
                         try:
-                            # Eğer HTML içinde __NEXT_DATA__ varsa onu parse et
                             if "__NEXT_DATA__" in text:
                                 json_match = re.search(r'__NEXT_DATA__" type="application/json">({.*?})</script>', text)
                                 if json_match:
                                     json_data = json.loads(json_match.group(1))
-                                else:
-                                    json_data = await res.json()
+                                    self._extract_json(json_data, discovered)
                             else:
-                                json_data = await res.json()
-                                
-                            self._extract_json(json_data, discovered)
+                                # Sadece saf JSON yanıtlarında
+                                if "application/json" in content_type:
+                                    json_data = await res.json()
+                                    self._extract_json(json_data, discovered)
                         except Exception:
                             pass
 
-                    # ----------------------------------------------------
-                    # HTML/JS Regex analizi
-                    # ----------------------------------------------------
+                    # 3. GENEL REGEX ANALİZİ (Fallback)
                     for m in self.PARAM_PATTERN.finditer(text):
                         p = m.group(1) or m.group(2)
+                        if self._is_valid_param(p):
+                            # Eğer form analizinden gelmediyse ekle
+                            if p not in discovered:
+                                discovered[p] = {
+                                    "level": self._classify_param(p),
+                                    "source": "HTML/JS-REGEX",
+                                    "mutable": "YES" if self._is_mutable(p) else "NO"
+                                }
 
-                        if not self._is_valid_param(p): # FP Kalkanı burada çalışır
-                            continue
-
-                        discovered[p] = {
-                            "level": self._classify_param(p),
-                            "source": "HTML/JS",
-                            "mutable": "YES" if self._is_mutable(p) else "NO"
-                        }
-
-                    # ----------------------------------------------------
-                    # SONUÇ
-                    # ----------------------------------------------------
+                    # SONUÇLARI KAYDET
                     if discovered:
-                        # Mutation kontrolünden geçenleri Engine'e gönder
                         mutable_params = {p for p, info in discovered.items() if info["mutable"] == "YES"}
                         
                         for param in mutable_params:
@@ -239,8 +210,7 @@ class PreScanner(BaseScanner):
                         
                         total_count = len(mutable_params)
                         self.add_result(self.category, "SUCCESS",
-                                         f"SRP Düşüş: 0.0 │ {total_count} parametre bulundu. Örn: {preview}", 0)
-
+                                       f"SRP Düşüş: 0.0 │ {total_count} parametre bulundu. Örn: {preview}", 0)
                     else:
                         self.add_result(self.category, "INFO", "SRP Düşüş: 0.0 │ Yeni parametre bulunamadı.", 0)
 
@@ -257,6 +227,48 @@ class PreScanner(BaseScanner):
                 await asyncio.sleep(1)
 
         completed_callback()
+
+    # ----------------------------------------------------------------------
+    # HTML Form Extractor (Legacy Hunter)
+    # ----------------------------------------------------------------------
+    def _extract_html_forms(self, content: str, discovered: Dict[str, Dict[str, str]]):
+        """
+        HTML içeriğindeki <input>, <textarea>, <select> elemanlarının 'name' niteliklerini toplar.
+        Regex yerine daha spesifik desenler kullanılır.
+        """
+        # Input pattern: <input ... name="X" ...>
+        # Basit regex ama name attribute'unu hedef alır.
+        input_matches = re.finditer(r'<input[^>]+name=["\']([^"\']+)["\']', content, re.IGNORECASE)
+        for m in input_matches:
+            name = m.group(1)
+            if self._is_valid_param(name) and not name.startswith("__"): # ASP.NET __VIEWSTATE hariç
+                discovered[name] = {
+                    "level": self._classify_param(name),
+                    "source": "HTML-FORM-INPUT",
+                    "mutable": "YES"
+                }
+
+        # Textarea pattern
+        textarea_matches = re.finditer(r'<textarea[^>]+name=["\']([^"\']+)["\']', content, re.IGNORECASE)
+        for m in textarea_matches:
+            name = m.group(1)
+            if self._is_valid_param(name):
+                discovered[name] = {
+                    "level": self._classify_param(name),
+                    "source": "HTML-FORM-TEXTAREA",
+                    "mutable": "YES"
+                }
+        
+        # Select pattern
+        select_matches = re.finditer(r'<select[^>]+name=["\']([^"\']+)["\']', content, re.IGNORECASE)
+        for m in select_matches:
+            name = m.group(1)
+            if self._is_valid_param(name):
+                discovered[name] = {
+                    "level": self._classify_param(name),
+                    "source": "HTML-FORM-SELECT",
+                    "mutable": "YES"
+                }
 
     # ----------------------------------------------------------------------
     # JSON Key Extractor

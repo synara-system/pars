@@ -15,17 +15,19 @@ from core.scanners.base_scanner import BaseScanner
 
 class IDORScanner(BaseScanner):
     """
+    [AR-GE v7.0 - FAZ 36 OPTİMİZASYON]
     URL Query Parametrelerinde Insecure Direct Object Reference (IDOR) zafiyetini tarar.
     Gelişmiş Çok Katmanlı Doğrulama (SimHash + Dice Similarity + Entropy Shift + Hassas Kelime Filtresi)
     ile güvenilir ve düşük false-positive oranlı IDOR tespiti sağlar.
+    
+    FAZ 36: ID listesi PayloadGenerator'dan çekilerek merkezi hale getirildi.
     """
 
     # Sayısal ID'leri yakalamak için RegEx
     ID_PATTERN = re.compile(r"(\d+)")
 
-    # [1, 2, 9999] ile test edilecek ID'ler (ID=1, ID=2, ID=9999)
-    # 9999 gibi rastgele sayılar bazen false positive verebilir, daha gerçekçi ID'ler eklendi.
-    TEST_IDS = [1, 2, 10, 100, 9999]
+    # [ESKİ PAYLOAD KALDIRILDI] TEST_IDS listesi artık PayloadGenerator'dan çekilecektir.
+    # TEST_IDS = [1, 2, 10, 100, 9999]
 
     # IDOR tespiti için minimum içerik boyutu veya içerik değişim eşiği
     CONTENT_DIFF_THRESHOLD = 50 # Düşürüldü
@@ -76,6 +78,12 @@ class IDORScanner(BaseScanner):
         IDOR tarama mantığını uygular (Asenkron).
         """
         try:
+            # KRİTİK KONTROL: PayloadGenerator'ın varlığını kontrol et
+            if not hasattr(self, 'payload_generator'):
+                self.log(f"[{self.category}] Payload Generator objesi bulunamadı. Tarama atlandı.", "CRITICAL")
+                completed_callback()
+                return
+            
             # 1. URL'yi parçalara ayır ve keşif parametrelerini topla
             parsed_url = urlparse(url)
             query_params = parse_qs(parsed_url.query)
@@ -130,6 +138,14 @@ class IDORScanner(BaseScanner):
                 )
 
             tasks: List[asyncio.Task] = []
+            
+            # --- FAZ 36 KRİTİK GÜNCELLEME: ID Payload'larını Generator'dan çek ---
+            try:
+                test_ids: List[int] = self.payload_generator.generate_idor_test_ids()
+            except AttributeError:
+                self.log(f"[{self.category}] KRİTİK: PayloadGenerator.generate_idor_test_ids() bulunamadı. Payload üretilemedi.", "CRITICAL")
+                completed_callback()
+                return
 
             # 3. FUZZING: Her parametreyi TEST_IDS ile test et.
             for param in all_target_params:
@@ -146,7 +162,7 @@ class IDORScanner(BaseScanner):
                 except ValueError:
                     continue
 
-                for test_id in self.TEST_IDS:
+                for test_id in test_ids: # TEST_IDS yerine test_ids kullanıldı
                     if test_id == original_id:
                         continue  # Kendini test etme
 

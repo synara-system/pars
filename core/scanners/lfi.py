@@ -15,14 +15,17 @@ from core.scanners.base_scanner import BaseScanner
 
 class LFIScanner(BaseScanner):
     """
-    [AR-GE v2.1 - FP-GUARD]
+    [AR-GE v2.2 - FAZ 36 OPTİMİZASYON]
     Yeni Nesil Local File Inclusion / Path Traversal Tarayıcı
     --------------------------------------------------------
-    V2.1: Base64 decode gürültüsü susturuldu ve kritik LFI tespiti için 
-    FP oranını düşüren sinyal güçlendirme (Heuristic Score + Signature) eklendi.
+    V2.2: Payload üretimi PayloadGenerator'a (AI/Simülasyon destekli) devredildi.
+    FP oranını düşüren sinyal güçlendirme (Heuristic Score + Signature) korunuyor.
     """
 
-    # Hedef dosyalar ve içerik imzaları (signature)
+    # --- ESKİ STATİK PAYLOAD VE PATH LİSTELERİ SİLİNDİ (FAZ 36 OPTİMİZASYON) ---
+    # Payload ve SENSITIVE_FILES artık self.payload_generator üzerinden çekiliyor.
+
+    # Hedef dosyalar ve içerik imzaları (signature) (Sadece Signature Kontrolü İçin Sınıf Seviyesinde Tutuldu)
     SENSITIVE_FILES: Dict[str, List[str]] = {
         # Linux (Yüksek Güvenilirlik İmza)
         "/etc/passwd": ["root:x:0:0", "daemon:x:", "/bin/bash"],
@@ -38,42 +41,7 @@ class LFIScanner(BaseScanner):
         "C:\\Windows\\win.ini": ["[fonts]", "[extensions]", "[mci extensions]"],
         "C:\\boot.ini": ["[boot loader]", "[operating systems]"],
     }
-
-    # Traversal + encoding varyasyonları
-    TRAVERSAL_PATTERNS: List[str] = [
-        "{path}",                          
-        "../{path}",
-        "../../{path}",
-        "../../../{path}",
-        "../../../../{path}",
-
-        # URL encoded
-        "..%2f{path}",
-        "..%2f..%2f{path}",
-        "..%2f..%2f..%2f{path}",
-        "..%2f..%2f..%2f..%2f{path}",
-
-        # double-encoding (path traversal bypass)
-        "..%252f..%252f{path}",
-        "..%252f..%252f..%252f{path}",
-        "..%252f..%252f..%252f..%252f{path}",
-        
-        # YENİ EKLENTİ: PHP Wrapper (RCE & Code Execution)
-        "php://filter/read=convert.base64-encode/resource={path}", 
-        "data://text/plain;base64,PD9waHAgZWNobyAnU1lOQVJBX0xGSSdwd25lZSc7ID8+/{path}", 
-
-        # YENİ EKLENTİ: Null Byte (Truncation) Evasion
-        "../../../../{path}%00",
-        "../../../../{path}%00.jpg", 
-
-        # Windows style
-        "..\\{path}",
-        "..\\..\\{path}",
-        "..\\..\\..\\{path}",
-        "..\\..\\..\\..\\{path}",
-        "..%5c..%5c{path}",
-        "..%5c..%5c..%5c{path}",
-    ]
+    # ---------------------------------------------------------------------------
 
     # Genel hatalar / WAF / CDN sayfaları → LFI sayma
     BLOCKING_KEYWORDS = [
@@ -143,6 +111,12 @@ class LFIScanner(BaseScanner):
         completed_callback: Callable[[], None],
     ):
         try:
+            # KRİTİK KONTROL: PayloadGenerator'ın varlığını kontrol et
+            if not hasattr(self, 'payload_generator'):
+                 self.log(f"[{self.category}] Payload Generator objesi bulunamadı. Tarama atlandı.", "CRITICAL")
+                 completed_callback()
+                 return
+                 
             parsed_url = urlparse(url)
             query_params = parse_qs(parsed_url.query)
 
@@ -169,21 +143,25 @@ class LFIScanner(BaseScanner):
             # Baseline yanıtını al (entropy + length referansı)
             await self._init_baseline(url, session)
 
-            # Tüm payload kombinasyonlarını oluştur
-            param_list = list(all_params)
-            file_payloads: List[Tuple[str, str]] = []  # (hedef_dosya, payload)
-
-            # Path'e göre payloadları doldur
-            for sensitive_path in self.SENSITIVE_FILES.keys():
-                for pattern in self.TRAVERSAL_PATTERNS:
-                    payload = pattern.format(path=sensitive_path)
-                    file_payloads.append((sensitive_path, payload))
-
+            # --- FAZ 36 KRİTİK GÜNCELLEME: Payload Generator'dan Saldırı Yollarını Çek ---
+            # Bu, (target_file, payload) tuple'larının Listesini döndürmelidir.
+            try:
+                # generate_lfi_attack_paths metodu PayloadGenerator'da tanımlanmalıdır.
+                file_payloads: List[Tuple[str, str]] = self.payload_generator.generate_lfi_attack_paths()
+            except AttributeError:
+                 # Hata durumunda (eğer generator henüz güncellenmediyse) boş liste döndür
+                 self.log(f"[{self.category}] KRİTİK: PayloadGenerator.generate_lfi_attack_paths() bulunamadı. Payload üretilemedi.", "CRITICAL")
+                 completed_callback()
+                 return
+                 
             semaphore = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
             tasks = []
 
             base_query = query_params
 
+            param_list = list(all_params)
+            
+            # Parametre ve Payload'ları birleştirerek görevleri oluştur
             for param in param_list:
                 for target_file, payload in file_payloads:
                     # data:// payload'ını sadece data_uri_test ile test et (SADECE BİR KEZ)
@@ -332,8 +310,8 @@ class LFIScanner(BaseScanner):
                                 
                                 # Kritik Signature kontrolü (Yüksek güvenilirlikli dosyalar)
                                 high_confidence_sig_hit = any(sig.lower() in decoded_content.lower() 
-                                                              for target in ["/etc/passwd", "/etc/shadow"]
-                                                              for sig in self.SENSITIVE_FILES.get(target, []))
+                                                                for target in ["/etc/passwd", "/etc/shadow"]
+                                                                for sig in self.SENSITIVE_FILES.get(target, []))
                                 
                                 if high_confidence_sig_hit:
                                     level = "CRITICAL"
@@ -353,9 +331,6 @@ class LFIScanner(BaseScanner):
 
                     # B) Normal Signature Kontrolü (YENİ GÜVENİLİRLİK MANTIĞI)
                     signatures = self.SENSITIVE_FILES.get(target_file, [])
-                    
-                    # Log Poisoning gibi düşük güvenilirlikli dosyalar için daha katı ol
-                    is_log_file = any(log_target in target_file for log_target in ["/var/log", "access.log", "messages"])
                     
                     if signatures:
                         # Eğer çok kritik bir imza eşleşirse (root:x:0:0), direkt raporla
@@ -422,10 +397,10 @@ class LFIScanner(BaseScanner):
             
             # Ciddi küçülme (Örn: Log file yerine küçük bir metin dosyası çekme)
             if (body_len < self.baseline_len) and (length_diff_ratio > 0.4):
-                 score += 2.0
+                score += 2.0
             # Ciddi büyüme (Örn: Binary dosya çekme)
             if (body_len > self.baseline_len) and (length_diff_ratio > 1.0):
-                 score += 1.0
+                score += 1.0
 
         # 2. Entropy farkı katkısı
         if self.baseline_entropy > 0.0:
@@ -435,7 +410,7 @@ class LFIScanner(BaseScanner):
                 score += 1.0
             # Text dosyası çıktısı → Düşük Entropi (Ratio < 0.7)
             elif ratio < 0.7:
-                 score += 0.5
+                score += 0.5
 
 
         # 3. Magic bytes tespiti ekstra sinyal
