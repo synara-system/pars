@@ -1,28 +1,145 @@
-https://app.uniswap.orgUniswap
-v4 yeni çıktı, TVL 6B$+, Immunefi 10M$ max★★★★★ (RCE/Logic/GraphQL)2
+PARS Otonom Tarama Canlı Test Matrisi (Yasal Laboratuvarlar)
 
-https://blur.ioNFT
-piyasası lideri, TVL 1B$+, çok yeni kod★★★★★ (Client-Side/Logic)
+Bu matris, PARS motorunun modüllerini, kasıtlı olarak zafiyetli bırakılmış, yasal ve halka açık test ortamlarında (Lab'lar) nasıl kullanabileceğinizi göstermektedir.
 
-https://app.pendle.financeYield
-protokolü, TVL 4B$+, çok hızlı büyüyor★★★★☆ (Business Logic/IDOR)
+UYARI: Bu platformlar dışında kalan gerçek siteleri, açık izin almadan veya bir Bug Bounty programının parçası olmadan taramak yasa dışıdır.
 
-https://bridge.orbitchain.io
-HackerOne’da açık program, max 250K$★★★★☆ (Bridge/SSRF/RCE)
+🎯 Test Hedefi / Tarayıcı Eşleştirmeleri
 
-https://app.aave.com
-Aave v3 yeni, TVL 12B$+, her zaman açık var★★★★☆ (Flashloan Logic/IDOR)
+PARS Tarayıcı Modülü
 
-https://opensea.io 
-Yeni React rewrite, çok JS, source map açık olabilir★★★★☆ (Client-Side/Secret Leak)
+Test Edilecek Zafiyet Tipi
 
-https://app.1inch.ioAggregation
-protokolü, çok endpoint★★★☆☆ (API/GraphQL)
+Önerilen Platform
 
-Yeni L2 NFT platformu, çok taze kod★★★☆☆ (React2Shell/Source Map)
+Erişim Linki / Yöntemi
 
-https://app.convexfinance.com
-Curve tabanlı, eski ama hâlâ 2B$+ TVL★★★☆☆ (Auth Bypass/IDOR)
+SQLi (SQL Injection)
 
-https://app.synthetix.io
-Eski ama periyodik kritik açık çıkıyor★★☆☆☆ (Business Logic)
+Veritabanı Enjeksiyonu
+
+Acunetix PHP/ASP
+
+http://testphp.vulnweb.com/
+
+XSS (Cross-Site Scripting)
+
+Yansıtılmış/Kalıcı Zafiyetler
+
+OWASP Juice Shop
+
+https://juice-shop.herokuapp.com
+
+IDOR / AUTH_BYPASS
+
+Yetki Atlama, API Mantık Hataları
+
+OWASP Juice Shop / WebGoat
+
+https://juice-shop.herokuapp.com
+
+LLM_INJECTION
+
+Prompt Enjeksiyonu, Güvenlik Kısıtlaması Atlama
+
+OWASP Juice Shop
+
+(Chatbot arayüzü varsa)
+
+LFI / RCE / SSRF
+
+İç Dosya Erişimi / Kod Çalıştırma / Sunucu Yanıltma
+
+Webhook.site
+
+https://webhook.site/ (Webhook URL'sini RCE/SSRF payload'larına enjekte et)
+
+HTTP_SMUGGLING
+
+HTTP İstek Kaçakçılığı
+
+PortSwigger Web Sec Academy
+
+(Özel olarak Smuggling lab'ları)
+
+RACE_CONDITION
+
+Yarış Koşulu (Stok/Kupon/Para Transferi)
+
+Kendi Local Sunucunuz
+
+http://127.0.0.1:5000 (En Etkili Test Yeri)
+
+PRE_SCAN / JS_ENDPOINT
+
+Endpoint/Secret Keşfi
+
+Tümü
+
+Ana URL'ler
+
+🌐 Detaylı Platform Listesi
+
+Platform Adı
+
+Odak Noktası
+
+URL
+
+Notlar
+
+OWASP Juice Shop
+
+Modern uygulamalar (REST, JWT, Business Logic)
+
+https://juice-shop.herokuapp.com
+
+En güncel zafiyet türlerini barındırır.
+
+Acunetix Test Siteleri
+
+PHP/ASP.NET'e özgü zafiyetler
+
+http://testphp.vulnweb.com/
+
+PARS'ın dil spesifik taramalarını test edin.
+
+OWASP WebGoat
+
+Gelişmiş Eğitim Platformu
+
+https://webgoat.cloud
+
+Modül modül ilerler, taramadan önce oturum açma gerektirebilir.
+
+PortSwigger Web Security Academy
+
+Çok Gelişmiş Lab'lar
+
+https://portswigger.net/web-security/all-labs
+
+Her lab için dinamik URL üretir.
+
+Google Gruyere
+
+Basit XSS, CSRF, Bilgi Sızıntısı
+
+https://google-gruyere.appspot.com/
+
+Temel güvenlik ilkelerini test etmek için ideal.
+
+Webhook.site
+
+Geri Çağrı (Callback) Mekanizması
+
+https://webhook.site/
+
+PARS'ın OOB (Out-of-Band) SSRF/RCE sinyallerini test etmek için kullanılmalıdır.
+
+HackTheBox Academy
+
+Canlı ve Hukukî Hedefler
+
+https://academy.hackthebox.com/
+
+Genellikle VPN ile erişim gerektirir.

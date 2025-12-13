@@ -1,29 +1,51 @@
 # path: core/ai_analyst.py
-
 import os
 import json
 import time
-import requests 
-from typing import List, Dict, Any, Optional, Callable # Callable eklendi
+import requests
+from typing import List, Dict, Any, Optional, Callable
 from urllib.parse import urlparse
 
-# Sabitler
-# MODEL_NAME = "gemini-2.5-flash-preview-09-2025" # DEPRECATED
-MODEL_NAME = "gemini-1.5-flash" # KARARLI MODEL
+# MODEL FALLBACK LİSTESİ (Öncelik Sırasına Göre)
+# Sistem 404 alırsa sıradakine geçer.
+AVAILABLE_MODELS = [
+    "gemini-1.5-flash",          # En Hızlı/Ucuz (Varsayılan)
+    "gemini-1.5-flash-001",      # Alternatif Versiyon
+    "gemini-1.5-flash-latest",   # Son Sürüm Alias
+    "gemini-1.5-pro",            # Daha Güçlü (Yedek)
+    "gemini-1.5-pro-001",        # Pro Versiyon
+    "gemini-pro"                 # Legacy (Son Çare)
+]
+
 API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent"
 
 class AIAnalyst:
     """
-    Synara'nın Yapay Zekâ Bilinci.
+    Synara'nın Yapay Zekâ Bilinci (Gemini 1.5 Smart Fallback Edition).
     Tarama sonuçlarını (SRP sonuçları ve kritik zafiyetler) alarak,
     hacker mantığıyla yorumlar ve aksiyon planı önerir.
-    FAZ 39: Kinetik Zincir Analizi (Kill Chain) eklendi.
+    
+    Güncellemeler:
+    - Smart Fallback: 404 hatasında otomatik model değiştirme.
+    - Robustness: API kararsızlıklarına karşı dirençli.
     """
     
     def __init__(self, logger: Callable):
         self.log = logger
-        # API anahtarını tutmayacağız, analyze_results metodunda alacağız.
-        self.api_url = API_URL_TEMPLATE.format(MODEL_NAME)
+        # Dinamik Model Yönetimi
+        self.current_model_index = 0
+        self.model_name = AVAILABLE_MODELS[0]
+        
+    def _get_current_url(self) -> str:
+        """Şu anki aktif model ile URL oluşturur."""
+        return API_URL_TEMPLATE.format(self.model_name)
+
+    def _switch_model(self):
+        """Bir sonraki modele geçer (Fallback)."""
+        old_model = self.model_name
+        self.current_model_index = (self.current_model_index + 1) % len(AVAILABLE_MODELS)
+        self.model_name = AVAILABLE_MODELS[self.current_model_index]
+        self.log(f"[AI ANALİST] Model Rotasyonu: {old_model} (404) -> {self.model_name} modeline geçiliyor...", "WARNING")
         
     def _construct_prompt(self, results: List[Dict[str, Any]], final_score: float) -> str:
         """
@@ -69,9 +91,8 @@ class AIAnalyst:
 
     def analyze_kill_chain(self, results: List[Dict[str, Any]], api_key: str) -> str:
         """
-        [FAZ 39] Kinetik Zincir Analizi:
+        Kinetik Zincir Analizi:
         Birden fazla zafiyeti birleştirerek tam sistem ele geçirme senaryosu (Kill Chain) oluşturur.
-        Özellikle RCE, SQLi, LFI ve Auth Bypass gibi kritik bulgulara odaklanır.
         """
         if not api_key:
             return "AI Bilinci: API Anahtarı eksik olduğu için Zincir Analizi yapılamadı."
@@ -85,7 +106,6 @@ class AIAnalyst:
         if not high_critical_findings:
             return "Kinetik Zincir Analizi: Zincir oluşturacak yeterli kritik bulgu tespit edilemedi (Sistem nispeten güvenli)."
 
-        # Prompt Hazırlığı
         prompt = "Sen elit bir Red Teamer'sın. Aşağıdaki kritik zafiyetleri birleştirerek hedef sistemi ele geçirmek için bir 'Kill Chain' (Saldırı Zinciri) senaryosu yaz.\n\n"
         prompt += "MEVCUT ZAFİYETLER:\n"
         
@@ -99,7 +119,6 @@ class AIAnalyst:
         prompt += "3. RİSK SEVİYESİ: Bu senaryonun gerçekleşme ihtimali ve etkisi.\n"
         prompt += "Çok teknik, net ve doğrudan saldırgan bakış açısıyla yaz."
 
-        # API İsteği
         return self._send_gemini_request(prompt, api_key, "KILL_CHAIN")
 
     def analyze_results(self, results: List[Dict[str, Any]], final_score: float, api_key: str) -> str:
@@ -114,7 +133,7 @@ class AIAnalyst:
 
     def _send_gemini_request(self, prompt: str, api_key: str, analysis_type: str) -> str:
         """
-        Gemini API'ye istek gönderen yardımcı metot.
+        Gemini API'ye istek gönderen yardımcı metot (Rotasyonlu).
         """
         system_instruction = (
             "Sen, MESTEG Teknoloji'nin yapay zeka Bilinci olan Synara'sın. "
@@ -129,23 +148,47 @@ class AIAnalyst:
             "generationConfig": { "temperature": 0.5 }
         }
 
-        self.log(f"[AI ANALİST] {analysis_type} analizi için Gemini API'ye istek gönderiliyor...", "INFO")
+        self.log(f"[AI ANALİST] {analysis_type} analizi için Gemini API ({self.model_name})'ye istek gönderiliyor...", "INFO")
         
-        # Retry Mantığı
-        for attempt in range(3):
+        clean_key = str(api_key).strip().strip("'").strip('"').strip('[').strip(']')
+        
+        # Retry Mantığı (Smart Fallback)
+        # Toplam deneme sayısı = Model sayısı * 2 (her model için ortalama 2 şans gibi, veya sabit sayı)
+        max_attempts = len(AVAILABLE_MODELS) + 2
+        
+        for attempt in range(max_attempts):
+            # Güncel URL'i al
+            current_url = self._get_current_url()
+            clean_url = current_url.strip().strip("'").strip('"')
+
             try:
-                response = requests.post(f"{self.api_url}?key={api_key}", headers=headers, data=json.dumps(payload), timeout=30)
-                response.raise_for_status() 
-                result = response.json()
+                response = requests.post(f"{clean_url}?key={clean_key}", headers=headers, data=json.dumps(payload), timeout=30)
                 
-                if 'candidates' not in result or not result['candidates']:
-                    return "AI Bilinci: Analiz yapılamadı (Boş yanıt)."
-                    
-                text = result['candidates'][0]['content']['parts'][0]['text']
-                return text.strip()
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'candidates' not in result or not result['candidates']:
+                        return "AI Bilinci: Analiz yapılamadı (Boş yanıt)."
+                    text = result['candidates'][0]['content']['parts'][0]['text']
+                    return text.strip()
+
+                # --- 404 ROTASYONU ---
+                elif response.status_code == 404:
+                    self._switch_model()
+                    # Beklemeden devam et
+                    continue
+                
+                # --- Rate Limit ---
+                elif response.status_code == 429:
+                    self.log(f"[AI ANALİST] Rate Limit (429). Bekleniyor...", "WARNING")
+                    time.sleep(2 * (attempt + 1))
+                    continue
+
+                else:
+                    self.log(f"[AI ANALİST] API Hatası: {response.status_code}", "WARNING")
+                    time.sleep(1)
                 
             except Exception as e:
-                self.log(f"[AI ANALİST] Hata ({attempt+1}/3): {str(e)[:100]}", "WARNING")
-                time.sleep(2)
+                self.log(f"[AI ANALİST] Bağlantı Hatası ({attempt+1}/{max_attempts}): {str(e)[:50]}", "WARNING")
+                time.sleep(1)
         
-        return "AI Bilinci: Bağlantı kurulamadı."
+        return "AI Bilinci: Tüm modeller denendi ancak bağlantı kurulamadı."

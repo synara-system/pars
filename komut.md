@@ -4,6 +4,7 @@ PAKETLER
 pip install customtkinter requests Jinja2
 pip install selenium webdriver-manager
 pip install pillow
+py -m pip install SQLAlchemy
 
 https://freelade.com/
 
@@ -11,6 +12,11 @@ https://freelade.com/
 SaaS Kurulum
 py start_server.py
 py debug_launcher.py
+
+py tests/local_vuln_server.py
+http://127.0.0.1:5000
+
+
 
 
 Docker Kurulum

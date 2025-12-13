@@ -1,5 +1,6 @@
 # path: Test/ui_ai_analyst.py
 # Synara AI Bilinci (AI Analyst) arayüzünü tanımlar.
+# GÜNCELLEME: Gemini 1.5 Flash entegrasyonu görsel olarak yansıtıldı.
 
 import customtkinter as ctk
 import threading
@@ -79,7 +80,7 @@ def setup_ai_analyst_tab(app):
     # Başlık
     ctk.CTkLabel(
         control_frame, 
-        text="SYNARA AKIL HOCASI (Gemini Destekli)", 
+        text="SYNARA AKIL HOCASI (Gemini 1.5 Flash)", 
         font=ctk.CTkFont(size=14, weight="bold"),
         text_color=app.COLOR_CYAN
     ).grid(row=0, column=0, padx=15, pady=10, sticky="w")
@@ -116,7 +117,7 @@ def setup_ai_analyst_tab(app):
     app.entry_ai_chat.bind('<Return>', lambda event: threading.Thread(target=app.run_ai_chat_thread, daemon=True).start())
     
     # Başlangıç mesajını göster
-    initial_msg = "Merhaba Kaptan. Synara'nın Bilinci aktif. Soru veya analiz isteği için hazırım. Puanlama yorumu almak için taramayı başlatın veya buraya bir fikir yazın."
+    initial_msg = "Merhaba Kaptan. Synara'nın Bilinci (Gemini 1.5 Flash) aktif. Soru veya analiz isteği için hazırım. Puanlama yorumu almak için taramayı başlatın veya buraya bir fikir yazın."
     
     # Güvenli çağrı: app'in append_to_ai_console metodu varsa onu kullan
     if hasattr(app, 'append_to_ai_console'):

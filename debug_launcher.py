@@ -1,84 +1,88 @@
-# path: debug_launcher.py
-# PARS Geliştirici / Debug Modu Başlatıcısı (Localhost/Desktop GUI)
+# path: PARS Pentest Autonomous Recon System/debug_launcher.py
+# PARS - Geliştirici Hibrit Başlatıcısı (v3.0)
+# Seçenek sunar: 1) Desktop GUI (Eski Debugger) 2) Web API Server (SaaS Modu)
 
 import os
 import sys
-import traceback
-import subprocess
 import time
+import threading
+import webbrowser
+import subprocess
 
-def install_deps():
-    print("[*] Kütüphaneler kontrol ediliyor (Geliştirici Modu)...")
-    # KRİTİK: Desktop GUI için gerekli tüm kütüphaneler kontrol edilir
-    required_packages = ["customtkinter", "aiohttp", "selenium", "webdriver-manager", "jinja2", "pdfkit", "pillow", "matplotlib"]
+def install_deps(mode="full"):
+    print(f"[*] Kütüphaneler kontrol ediliyor ({mode})...")
+    required_packages = ["fastapi", "uvicorn", "python-dotenv", "requests"]
+    
+    if mode == "desktop":
+        required_packages.extend(["customtkinter", "pillow", "matplotlib"])
     
     for package in required_packages:
         try:
-            # Özel import isimlerini yönet
             import_name = package.replace("-", "_")
             if package == "pillow": import_name = "PIL"
-            
+            if package == "python-dotenv": import_name = "dotenv"
             __import__(import_name)
-        except ImportError as e:
-            print(f"[UYARI] Eksik kütüphane tespit edildi: {e}")
-            print("Lütfen terminalde 'pip install -r requirements_full.txt' komutunu çalıştırın.")
-            input("Devam etmek için Enter'a basın (Yüklediyseniz)...")
-            break # Hata bulunca kontrolü durdur
+        except ImportError:
+            print(f"[!] Eksik: {package}. Yükleniyor...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-    print("[OK] Temel kütüphaneler mevcut/kontrol edildi.")
-
-def main():
-    # Çalışma dizinini betiğin olduğu yer yap (Path sorunlarını çözer)
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(current_dir)
+def launch_desktop_gui():
+    """Eski Desktop GUI'yi başlatır (Test/gui_main.py)"""
+    print("\n[MOD 1] Desktop GUI Başlatılıyor...")
+    install_deps("desktop")
     
-    # Python path'ine ekle
+    current_dir = os.path.dirname(os.path.abspath(__file__))
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
-
-    print(f"PARS Security Başlatıcı v2.0 (DEBUG MODE)")
-    print(f"Çalışma Dizini: {current_dir}")
-    print("-" * 40)
-
-    # 1. Klasör Kontrolü
-    required_dirs = ["reports", "core", "Test"]
-    for d in required_dirs:
-        if not os.path.exists(d):
-            try:
-                os.makedirs(d)
-                print(f"[ONARIM] '{d}' klasörü oluşturuldu.")
-            except Exception as e:
-                print(f"[HATA] '{d}' klasörü oluşturulamadı: {e}")
-
-    # 2. Uygulamayı Başlat (Desktop GUI)
+        
     try:
-        print("[1] Desktop GUI Modülleri yükleniyor (Debug Mode)...")
-        # Desktop GUI dosyasına doğrudan referans veriyoruz
-        from Test.gui_main import MestegApp 
-        
-        print("[2] Geliştirici Arayüzü başlatılıyor...")
+        from Test.gui_main import MestegApp
         app = MestegApp()
-        
-        print("[3] PARS Aktif! (Localhost/Desktop Penceresi açılıyor...)")
         app.mainloop()
-        
-    except ImportError as e:
-        print("\n" + "!"*50)
-        print("[KRİTİK HATA] Desktop GUI modülü (gui_main.py) bulunamadı!")
-        print("!"*50)
-        print(f"Hata Detayı: {e}")
-        print("\nOlası Çözümler:")
-        print("1. 'pip install -r requirements_full.txt' komutunu çalıştırdınız mı?")
-        print("2. 'Test/gui_main.py' dosyasının yerinde olduğundan emin olun.")
-        input("\nÇıkış için Enter'a basın...")
-        
     except Exception as e:
-        print("\n" + "!"*50)
-        print("[BEKLENMEDİK HATA] Uygulama çöktü.")
-        print("!"*50)
-        traceback.print_exc()
-        input("\nÇıkış için Enter'a basın...")
+        print(f"[HATA] GUI Başlatılamadı: {e}")
+        input("Çıkış...")
+
+def launch_web_api():
+    """Yeni SaaS API Sunucusunu başlatır (api_server.py)"""
+    print("\n[MOD 2] SaaS API Server Başlatılıyor...")
+    install_deps("server")
+    
+    import uvicorn
+    
+    def open_browser():
+        time.sleep(2)
+        dashboard_path = os.path.abspath("web_dashboard.html")
+        print(f"[INFO] Dashboard: file://{dashboard_path}")
+        webbrowser.open(f"file://{dashboard_path}")
+        webbrowser.open("http://127.0.0.1:8000/docs")
+
+    threading.Thread(target=open_browser, daemon=True).start()
+    
+    # API Server'ı başlat
+    try:
+        # Mevcut dizini path'e ekle ki modüller bulunsun
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        uvicorn.run("api_server:app", host="127.0.0.1", port=8000, reload=True)
+    except Exception as e:
+        print(f"[HATA] API Server Başlatılamadı: {e}")
 
 if __name__ == "__main__":
-    install_deps()
-    main()
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    
+    print("="*50)
+    print("PARS GELİŞTİRİCİ KONSOLU (DEBUGGER)")
+    print("="*50)
+    print("1. Desktop GUI (Eski Geliştirici Arayüzü)")
+    print("2. Web API Server (SaaS Backend Testi)")
+    print("-" * 50)
+    
+    choice = input("Seçiminiz (1/2): ").strip()
+    
+    if choice == "1":
+        launch_desktop_gui()
+    elif choice == "2":
+        launch_web_api()
+    else:
+        print("Geçersiz seçim. Varsayılan olarak Web API (2) başlatılıyor...")
+        launch_web_api()

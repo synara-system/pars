@@ -14,7 +14,7 @@ from .data_simulator import DataSimulator
 
 class PayloadGenerator:
     """
-    [AR-GE v2.1 - CHAOS ENGINE & FAZ 36 OPTİMİZASYON]
+    [AR-GE v2.2 - Nihai Tip Güvenliği & CHAOS ENGINE & FAZ 36 OPTİMİZASYON]
     Güvenlik taramaları için dinamik, encode edilmiş ve WAF atlatma (evasion) yeteneğine sahip
     gelişmiş payload üretim motoru.
     
@@ -173,14 +173,13 @@ class PayloadGenerator:
 
     # --- CONTEXT-AWARE XSS (Genişletilmiş) ---
     CONTEXT_AWARE_PAYLOADS = {
-        "SCRIPT": [ "';alert(1)//", "'-alert(1)-'", "</script><script>alert(1)</script>", "\\x3cscript\\x3ealert(1)\\x3c/script\\x3e", ],
+        "SCRIPT": [ "';alert(1)//", "'-alert(1)-'", "</script><script>alert(1)</script>", "\\x3cscript\\x65alert(1)\\x3c/script\\x65", ],
         "ATTRIBUTE": [ "\" onmouseover=alert(1) x=\"", "' autofocus onfocus=alert(1) x='", "\"><svg/onload=alert(1)>", "\" style=\"behavior:url(#default#time2)\" onbegin=\"alert(1)\"", "&#x6f;&#x6e;&#x6c;&#x6f;&#x61;&#x64;=alert&#x28;1&#x29;", ],
         "BODY": [ "<svg/onload=alert(1)>", "<details/open/ontoggle=alert(1)>", "<img src=x onerror=alert(1)>", "<iframe/src=javascript:alert(1)>", "<\x73\x63\x72\x69\x70\x74>alert(1)</script>", ],
     }
 
     def __init__(self, neural_engine_instance): # FAZ 40: Artık NeuralEngine değil, Engine objesini bekler.
         # Engine objesi, Engine.queue_ai_payload_request metodu ile enjekte edilecek.
-        # Engine'den gelen obje, artık 'neural_engine' değil, doğrudan 'engine_controller' veya benzeri bir isimle tutulmalı.
         # Ancak uyumluluk için, Engine'e zaten Engine.queue_ai_payload_request metodu eklendiği varsayılır.
         self.engine_controller = neural_engine_instance # Geçici isim NeuralEngine yerine Engine instance'ını tutacak
         
@@ -195,7 +194,15 @@ class PayloadGenerator:
         """
         tech_info = set()
         
+        # KRİTİK KORUMA (v2.2): Gelen argümanın liste olmadığından emin ol. 
+        # Eğer liste değilse (örn. str), döngüye girmeden boş döndür.
+        if not isinstance(results_list, list):
+            return []
+
         for result in results_list:
+            if not isinstance(result, dict): # Ek koruma: Listenin elemanının da sözlük olduğundan emin ol.
+                continue
+            
             if result['category'] == 'HEURISTIC' and 'Sunucu yazılımı' in result['message']:
                 match = re.search(r':\s*(.*)', result['message'])
                 if match:
@@ -244,11 +251,11 @@ class PayloadGenerator:
         # --- FAZ 40: KUYRUK ÜZERİNDEN AI ÇAĞRISI ---
         # Payload Generator, artık doğrudan Engine'e kuyruğa atması için talimat verir.
         try:
-             ai_payloads = await self.engine_controller.queue_ai_payload_request(context_data, "XSS", 5)
+            ai_payloads = await self.engine_controller.queue_ai_payload_request(context_data, "XSS", 5)
         except AttributeError:
-             # Eğer Engine'e doğru bağlanamadıysa veya metot yoksa (eski versiyon)
-             self.engine_controller.log("[PAYLOAD GOV] KRİTİK HATA: Engine Kuyruk Arayüzü bulunamadı. Simüle payload kullanılıyor.", "CRITICAL")
-             ai_payloads = DataSimulator.simulate_ai_payloads("XSS", 5)
+            # Eğer Engine'e doğru bağlanamadıysa veya metot yoksa (eski versiyon)
+            self.engine_controller.log("[PAYLOAD GOV] KRİTİK HATA: Engine Kuyruk Arayüzü bulunamadı. Simüle payload kullanılıyor.", "CRITICAL")
+            ai_payloads = DataSimulator.simulate_ai_payloads("XSS", 5)
         
         # 2. Statik Context-Aware Payload'ları Yükle
         context_key = context_type.upper().strip()
@@ -274,10 +281,10 @@ class PayloadGenerator:
         
         # --- FAZ 40: KUYRUK ÜZERİNDEN AI ÇAĞRISI ---
         try:
-             ai_payloads = await self.engine_controller.queue_ai_payload_request(context or {}, "XSS", 5)
+            ai_payloads = await self.engine_controller.queue_ai_payload_request(context or {}, "XSS", 5)
         except AttributeError:
-             self.engine_controller.log("[PAYLOAD GOV] KRİTİK HATA: Engine Kuyruk Arayüzü bulunamadı. Simüle payload kullanılıyor.", "CRITICAL")
-             ai_payloads = DataSimulator.simulate_ai_payloads("XSS", 5)
+            self.engine_controller.log("[PAYLOAD GOV] KRİTİK HATA: Engine Kuyruk Arayüzü bulunamadı. Simüle payload kullanılıyor.", "CRITICAL")
+            ai_payloads = DataSimulator.simulate_ai_payloads("XSS", 5)
             
         # 2. Statik Payload'ları Yükle
         final_payloads = set(ai_payloads)
@@ -298,13 +305,25 @@ class PayloadGenerator:
 
         # --- FAZ 40: KUYRUK ÜZERİNDEN AI ÇAĞRISI ---
         try:
-             ai_payloads = await self.engine_controller.queue_ai_payload_request(context or {}, "SQLi", 5)
+            ai_payloads = await self.engine_controller.queue_ai_payload_request(context or {}, "SQLi", 5)
         except AttributeError:
-             self.engine_controller.log("[PAYLOAD GOV] KRİTİK HATA: Engine Kuyruk Arayüzü bulunamadı. Simüle payload kullanılıyor.", "CRITICAL")
-             ai_payloads = DataSimulator.simulate_ai_payloads("SQLi", 5)
+            self.engine_controller.log("[PAYLOAD GOV] KRİTİK HATA: Engine Kuyruk Arayüzü bulunamadı. Simüle payload kullanılıyor.", "CRITICAL")
+            ai_payloads = DataSimulator.simulate_ai_payloads("SQLi", 5)
             
         # 2. Statik Payload'ları Yükle
-        final_payloads = set(ai_payloads)
+        
+        # KRİTİK DÜZELTME (v2.2): AI'dan gelen payload'ların sadece string olduğundan emin ol.
+        # Bu, AI'ın yanlışlıkla liste/sözlük döndürdüğü (ve sqli.py'deki set'e eklendiğinde TypeError'a neden olduğu) durumu engeller.
+        safe_ai_payloads = set()
+        for p in ai_payloads:
+            try:
+                safe_ai_payloads.add(str(p))
+            except Exception:
+                self.engine_controller.log(f"[PAYLOAD GOV] UYARI: AI'dan gelen payload string'e çevrilemedi: {type(p).__name__}", "WARNING")
+                pass 
+            
+        final_payloads = safe_ai_payloads
+
         for payload in self.BASE_SQLI_PAYLOADS:
             processed = self._process_payload(payload, is_sqli=True)
             final_payloads.add(self._url_encode(processed))

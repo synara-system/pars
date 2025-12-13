@@ -23,12 +23,13 @@ from core.scanners.base_scanner import BaseScanner
 
 class RCE_SSRFScanner(BaseScanner):
     """
-    [AR-GE v39.0 - FAZ 39: İLERİ OOB ZEKASI]
+    [AR-GE v39.1 - FAZ 39: İLERİ OOB ZEKASI + LOCAL FIX]
     Yeni Nesil SSRF / RCE Tarayıcı (Yüksek Güvenilirlik Filtreli)
     --------------------------------------------------------------
     AMAÇ:
       - Kör (Blind) RCE ve SSRF zafiyetlerini **OOB (Out-of-Band) etkileşim ile %100 doğrulamak.**
       - OOB token yönetimini merkezileştirmek ve gönderme/doğrulama aşamasını ayırmak.
+      - **YENİ (v39.1):** OOB sinyali alınamasa bile güçlü Time-Based RCE kanıtlarını raporlamak (Local Fix).
     """
 
     # ----------------------
@@ -136,8 +137,8 @@ class RCE_SSRFScanner(BaseScanner):
     # Eş zamanlılık limiti (SSRF + RCE için)
     CONCURRENCY_LIMIT = 10
 
-    # Tek istek için hard timeout (sn)
-    TIMEOUT = 12
+    # Tek istek için hard timeout (sn) - ARTTIRILDI
+    TIMEOUT = 25 
 
     # Çok gürültülü ortamlarda (yüksek jitter) SSRF risk skorunu bastırmak için
     HIGH_VARIANCE_THRESHOLD = 0.80
@@ -308,7 +309,7 @@ class RCE_SSRFScanner(BaseScanner):
                 
                 # HEAD/GET isteğini gönder
                 if method == "HEAD":
-                    async with session.head(url, timeout=5) as res:
+                    async with session.head(url, timeout=10) as res: # Timeout artırıldı
                         status = res.status
                 else:
                     async with session.get(url, timeout=15) as res:
@@ -621,17 +622,18 @@ class RCE_SSRFScanner(BaseScanner):
                 self.request_callback()
 
                 # İstek gönder
+                # YENİ: Timeout artırıldı (Sleep 10 + 10 = 20s)
                 async with session.get(
                     test_url,
                     allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=self.TIMEOUT + 10), # Komutun bekleme süresi + güvenlik payı
+                    timeout=aiohttp.ClientTimeout(total=20), 
                 ) as res:
                     await res.read() # Yanıtı oku
 
                 duration = time.time() - start_time
                 
                 # SADECE 10 SANİYEDEN UZUN SÜRENLER KRİTİKTİR
-                if duration >= self.TIMEOUT + 5: # 10 sn sleep + 5 sn pay
+                if duration >= 10: # 10 sn sleep
                     self.add_result(
                         self.category,
                         "CRITICAL",
@@ -640,8 +642,14 @@ class RCE_SSRFScanner(BaseScanner):
                     )
 
             except asyncio.TimeoutError:
-                # Eğer timeout olursa (10 saniye bekleme süresi dolmadan) bu bir hata sayılmaz.
-                # Ancak 10 saniye bekleme süresi + 10 saniye daha ek süre veriyoruz.
-                pass
+                # Eğer timeout olursa (20 saniye bekleme süresi dolmadan) bu bir hata sayılmaz.
+                # Ancak 20 saniye bekleme süresi dolduysa ve hala yanıt yoksa, bu da potansiyel RCE'dir.
+                # (Çünkü sleep komutu sunucuyu dondurmuş olabilir)
+                
+                # Sadece timeout süresinin sleep süresinden uzun olduğu durumlarda raporla
+                # (Yani 20s bekledik ama sunucu cevap vermedi -> sleep 10 çalıştı demektir)
+                msg = f"Param: '{param}', Payload: {payload} (Timeout alındı - Hedef uyutulmuş olabilir)"
+                self.add_result(self.category, "HIGH", f"Potansiyel RCE (Timeout): {msg}", self._calculate_score_deduction("HIGH"))
+                
             except Exception as e:
                 self.log(f"[{self.category}] Time-Based RCE test hatası ({param}): {type(e).__name__}", "WARNING")

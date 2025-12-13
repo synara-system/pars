@@ -1,31 +1,53 @@
-GUI ve Görselleştirme
+--- PARS Core Dependencies for Gemini 1.5 Transition ---
+
+AI & LLM (Critical for Gemini 1.5)
+
+google-generativeai>=0.8.3
+
+GUI & Visualization
 
 customtkinter==5.2.2
 pillow
 matplotlib
+tk
 
-Ağ ve İstekler
+Network & Requests
 
 requests
 aiohttp
 dnspython
+urllib3
 
-Web ve API
+Web & API Server
 
 fastapi
 uvicorn
+flask
+flask-cors
 python-dotenv
 
-Raporlama ve Analiz
+Reporting & Analysis
 
 jinja2
 pdfkit
+weasyprint
 
-Dinamik Tarama (Bot)
+Dynamic Scanning & Browser Automation
 
 selenium
 webdriver-manager
+beautifulsoup4
+lxml
 
-Veri İşleme
+Data Processing & Validation
 
 pydantic
+pandas
+numpy
+
+Utils & Terminal
+
+colorama
+termcolor
+tqdm
+click

@@ -1,4 +1,4 @@
-# path: core/report_manager.py
+# path: PARS Pentest Autonomous Recon System/core/report_manager.py
 
 import customtkinter as ctk
 import os
@@ -6,27 +6,177 @@ import re
 import tkinter as tk # tk.Text widget'ları için
 from urllib.parse import urlparse
 from colorsys import rgb_to_hsv, hsv_to_rgb # Renk geçişleri için eklendi
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy import select, func
+from .models import Scan, Vulnerability # Yeni modelleri içe aktar
+from .database import SessionLocal, init_db # DB bağlantısını ve başlangıcı içe aktar
+from datetime import datetime
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Renk Paleti (Liquid Glass/Aero Simulasyonu) - synara_gui_v2.py ile senkronize edildi
-COLOR_BG = "#0D1117"        # Vanta Black / Derin Arka Plan
-COLOR_SIDEBAR = "#1F2937"   # Mat Slate (Liquid Glass Yüzeyi)
-COLOR_ACCENT = "#3b82f6"    # Blue 500 (Vurgu)
-COLOR_SUCCESS = "#22c55e"   # Green 500
-COLOR_ERROR = "#ef4444"     # Red 500
-COLOR_WARNING = "#eab308"   # Yellow 500
+COLOR_BG = "#0D1117" # Vanta Black / Derin Arka Plan
+COLOR_SIDEBAR = "#1F2937" # Mat Slate (Liquid Glass Yüzeyi)
+COLOR_ACCENT = "#3b82f6" # Blue 500 (Vurgu)
+COLOR_SUCCESS = "#22c55e" # Green 500
+COLOR_ERROR = "#ef4444" # Red 500
+COLOR_WARNING = "#eab308" # Yellow 500
 COLOR_TEXT_SECONDARY = "#94a3b8" # Gri-Mavi
 
 class ReportManager:
     """
-    GUI'den çağrılan, rapor dosyalarından veri çekme ve karşılaştırma penceresi
-    gibi rapor yönetimi işlevlerini barındırır.
+    Rapor verilerinin kalıcılığını (DB) ve yönetimine (GUI/Karşılaştırma) odaklanır.
+    Tüm zafiyetler artık RAM yerine SQLite veritabanında saklanır.
     """
     
+    def __init__(self, target_url: str = None, target_ip: str = None, scan_config: dict = None, db: Session = None):
+        """
+        ReportManager'ı bir tarama oturumu ile başlatır.
+        Eğer bir DB oturumu verilmemişse (GUI kullanımı gibi), sadece statik metotlar çalışır.
+        Eğer target_url verilmişse (tarama motoru), yeni bir Scan oturumu oluşturulur.
+        """
+        self.db = db
+        self.scan_id = None
+        self.target_url = target_url
+        
+        if self.db and target_url:
+            self._start_new_scan(target_url, target_ip, scan_config)
+
+    def _start_new_scan(self, target_url: str, target_ip: str, scan_config: dict):
+        """Yeni bir tarama oturumu başlatır ve DB'ye kaydeder."""
+        try:
+            # Pydantic JSON'a çevrilmişse geri dict'e çevir (veya None'ı koru)
+            config_data = json.loads(scan_config.json()) if hasattr(scan_config, 'json') else scan_config
+            
+            new_scan = Scan(
+                target_url=target_url,
+                target_ip=target_ip,
+                config=config_data,
+                status="RUNNING"
+            )
+            self.db.add(new_scan)
+            self.db.commit()
+            self.db.refresh(new_scan)
+            self.scan_id = new_scan.id
+            logger.info(f"Yeni tarama oturumu başlatıldı. Scan ID: {self.scan_id}")
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Yeni tarama oturumu başlatılamadı: {e}")
+            self.scan_id = None
+
+    def add_vulnerability(self, type: str, severity: str, url: str, parameter: str = None, 
+                          payload: str = None, proof: str = None, request_data: str = None):
+        """
+        Bulunan zafiyeti veritabanına kaydeder. Artık bellekteki listeleri kullanmıyoruz.
+        """
+        if not self.scan_id or not self.db:
+            logger.warning("Veritabanı oturumu veya Tarama ID'si mevcut değil. Zafiyet kaydedilemedi.")
+            return
+
+        try:
+            new_vuln = Vulnerability(
+                scan_id=self.scan_id,
+                vulnerability_type=type,
+                severity=severity,
+                url=url,
+                parameter=parameter,
+                payload=payload,
+                proof=proof,
+                request_data=request_data
+            )
+            self.db.add(new_vuln)
+            self.db.commit()
+            logger.debug(f"Zafiyet DB'ye kaydedildi: {type} @ {url}")
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Zafiyet DB'ye kaydedilirken hata oluştu: {e}")
+
+    def finish_scan(self, status: str = "COMPLETED"):
+        """Tarama oturumunu sonlandırır ve bitiş zamanını kaydeder."""
+        if not self.scan_id or not self.db:
+            return
+
+        try:
+            scan = self.db.execute(select(Scan).filter(Scan.id == self.scan_id)).scalar_one()
+            scan.end_time = datetime.utcnow()
+            scan.status = status
+            self.db.commit()
+            logger.info(f"Tarama oturumu {status} olarak sonlandırıldı: {self.scan_id}")
+        except NoResultFound:
+            logger.error(f"Sonlandırılacak tarama oturumu bulunamadı: {self.scan_id}")
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Tarama oturumu sonlandırılırken hata oluştu: {e}")
+
+    def get_vulnerabilities(self):
+        """Veritabanından mevcut tarama oturumuna ait tüm zafiyetleri çeker."""
+        if not self.scan_id or not self.db:
+            return []
+
+        try:
+            vulns = self.db.scalars(
+                select(Vulnerability).filter(Vulnerability.scan_id == self.scan_id)
+            ).all()
+            
+            # Raporlama için uygun formatta (dict listesi) döndürür
+            return [v.to_dict for v in vulns]
+            
+        except Exception as e:
+            logger.error(f"Zafiyetler çekilirken hata oluştu: {e}")
+            return []
+
+    @staticmethod
+    def get_scan_report_data(scan_id: str, db: Session):
+        """Verilen Scan ID'ye göre DB'den rapor verilerini çeker."""
+        try:
+            scan = db.execute(select(Scan).filter(Scan.id == scan_id)).scalar_one()
+            
+            # Zafiyetleri çek ve say
+            vulns = db.scalars(
+                select(Vulnerability).filter(Vulnerability.scan_id == scan_id)
+            ).all()
+            
+            total_results = len(vulns)
+            
+            # Basit bir skor hesaplaması yapabiliriz (Mevcut raporlama mantığına göre uyarlanmalı)
+            # Şimdilik, sadece toplam sonuç sayısını baz alıyoruz. Gerçek skor Reporter içinde hesaplanıyor olabilir.
+            # Skorun hesaplanması için Reporter modülüne bakılmalıdır. 
+            # Şu anki ReportManager.extract_report_data HTML'den çektiği için 
+            # buraya basitçe 100 - (10 * Yüksek Risk Sayısı) gibi bir skorlandırma entegre edilebilir.
+            
+            # Rapor Şablonu (HTML) uyumu için dictionary oluştur
+            report_data = {
+                "scan_id": scan.id,
+                "target_url": scan.target_url,
+                "target_ip": scan.target_ip,
+                "start_time": scan.start_time.strftime("%Y-%m-%d %H:%M:%S") if scan.start_time else "Bilinmiyor",
+                "end_time": scan.end_time.strftime("%Y-%m-%d %H:%M:%S") if scan.end_time else "Hala Çalışıyor",
+                "status": scan.status,
+                "vulnerabilities": [v.to_dict for v in vulns],
+                # Not: Skor ve Total Results bu metodun çağırıldığı yere göre güncellenmeli.
+                # GUI karşılaştırması için (extract_report_data yerine) kullanılacak.
+            }
+            return report_data
+            
+        except NoResultFound:
+            logger.warning(f"Scan ID bulunamadı: {scan_id}")
+            return None
+        except Exception as e:
+            logger.error(f"DB'den rapor verisi çekilirken hata oluştu: {e}")
+            return None
+
+    # --- Mevcut Statik Metotlar ve GUI Fonksiyonları (DEĞİŞTİRİLMEDİ) ---
+
     @staticmethod
     def extract_report_data(report_base_name):
         """
         Verilen temel rapor adından (Synara_Scan_YYYYMMDD_HHMMSS) HTML dosyasını okur ve
-        skor, toplam sonuç ve hedef URL gibi kritik verileri çıkarır.
+        skor, toplam sonuç ve hedef URL gibi kritik verileri çıkarır. 
+        BU METOT ŞU ANLIK GERİYE UYUMLULUK İÇİN KORUNMUŞTUR.
+        DB'ye tam geçiş yapıldığında, GUI'nin bu metot yerine DB'yi kullanması gerekir.
         """
         report_dir = os.path.join(os.getcwd(), "reports")
         html_path = os.path.join(report_dir, f"{report_base_name}.html")
@@ -60,16 +210,21 @@ class ReportManager:
             # Rapor okunamadı veya regex başarısız oldu
             return None
 
+# Diğer GUI ve Yardımcı Fonksiyonlar (Aynı Bırakıldı)
+
 def _hex_to_rgb(hex_color):
+# ... (Fonksiyon gövdesi aynı)
     """Hex kodu (ör: #ff00ff) RGB tuple'ına çevirir."""
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
 def _rgb_to_hex(rgb_tuple):
+# ... (Fonksiyon gövdesi aynı)
     """RGB tuple'ını Hex koduna çevirir."""
     return f'#{int(rgb_tuple[0]):02x}{int(rgb_tuple[1]):02x}{int(rgb_tuple[2]):02x}'
 
 def _interpolate_color(color1_hex, color2_hex, factor):
+# ... (Fonksiyon gövdesi aynı)
     """İki renk arasında interpolasyon yapar (factor 0.0'dan 1.0'a)."""
     rgb1 = _hex_to_rgb(color1_hex)
     rgb2 = _hex_to_rgb(color2_hex)
@@ -81,6 +236,7 @@ def _interpolate_color(color1_hex, color2_hex, factor):
     return _rgb_to_hex((r, g, b))
 
 class ComparisonWindow(ctk.CTkToplevel):
+# ... (Sınıf gövdesi aynı)
     """
     İki raporun karşılaştırma sonuçlarını gösteren yeni pencere.
     (UX Odaklı Görselleştirme eklendi)
@@ -129,6 +285,7 @@ class ComparisonWindow(ctk.CTkToplevel):
 
     
     def _setup_score_card(self, master, score1, score2):
+    # ... (Fonksiyon gövdesi aynı)
         """Puan farkını görselleştiren merkezi kartı kurar."""
         
         score_diff = score2 - score1
@@ -170,7 +327,7 @@ class ComparisonWindow(ctk.CTkToplevel):
 
         ctk.CTkLabel(diff_card, text=f"{arrow}", font=ctk.CTkFont(size=30, weight="bold"), 
                      text_color=color).pack(pady=(10, 0))
-                     
+                    
         ctk.CTkLabel(diff_card, text=f"{abs(score_diff)} Puan", 
                      font=ctk.CTkFont(size=36, weight="bold"), text_color=color).pack(pady=0)
         
@@ -187,6 +344,7 @@ class ComparisonWindow(ctk.CTkToplevel):
 
 
     def _create_score_label(self, master, column, score):
+    # ... (Fonksiyon gövdesi aynı)
         """Tek bir raporun puanını gösteren kutuyu döndürür."""
         
         # Puanı renklendirme (0-50 Kötü, 50-80 Uyarı, 80-100 İyi)
@@ -200,14 +358,15 @@ class ComparisonWindow(ctk.CTkToplevel):
         
         ctk.CTkLabel(frame, text="GÜVENLİK SKORU", font=ctk.CTkFont(size=12, weight="bold"), 
                      text_color=COLOR_TEXT_SECONDARY).pack(pady=(15, 0))
-                     
+                    
         ctk.CTkLabel(frame, text=f"{score}", font=ctk.CTkFont(size=40, weight="bold"), 
                      text_color=score_color).pack(pady=(0, 15))
-                     
+                    
         return frame
 
 
     def _setup_results_diff_cards(self, master, results1, results2):
+    # ... (Fonksiyon gövdesi aynı)
         """Yeni ve kapanan riskleri gösteren alt kartları kurar."""
         
         new_risks = max(0, results2 - results1)
@@ -232,6 +391,7 @@ class ComparisonWindow(ctk.CTkToplevel):
 
 
     def _create_risk_card(self, master, column, title, count, color, icon):
+    # ... (Fonksiyon gövdesi aynı)
         """Yeni/Kapanan riskler için küçük bir bilgi kartı oluşturur."""
         
         card = ctk.CTkFrame(master, fg_color=COLOR_SIDEBAR, corner_radius=10)
@@ -241,7 +401,7 @@ class ComparisonWindow(ctk.CTkToplevel):
         
         ctk.CTkLabel(card, text=f"{icon} {count} Adet", font=ctk.CTkFont(size=24, weight="bold"), 
                      text_color=color).pack(pady=(0, 10))
-                     
+                    
         return card
 
 # Yardımcı renk fonksiyonları artık global olarak tanımlanmıştır.

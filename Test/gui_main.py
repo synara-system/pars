@@ -1,5 +1,6 @@
 # path: Test/gui_main.py
 # Ana Synara GUI'sini (MestegApp) içerir. Diğer modülleri import eder.
+# Sürüm: v2.1 (SaaS Profil Entegrasyonu)
 
 import customtkinter as ctk
 import tkinter as tk 
@@ -410,25 +411,25 @@ class MestegApp(ctk.CTk):
         nav_label.grid(row=4, column=0, padx=20, pady=(20, 5), sticky="w") 
 
         self.btn_nav_dashboard = ctk.CTkButton(sidebar, text="🛡️ DASHBOARD", height=35, corner_radius=6,
-                                             font=ctk.CTkFont(size=12, weight="bold"),
-                                             fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
-                                             hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
-                                             command=lambda: self.select_tab("dashboard"))
+                                               font=ctk.CTkFont(size=12, weight="bold"),
+                                               fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
+                                               hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
+                                               command=lambda: self.select_tab("dashboard"))
         self.btn_nav_dashboard.grid(row=5, column=0, padx=15, pady=2, sticky="ew")
 
         self.btn_nav_reports = ctk.CTkButton(sidebar, text="📊 REPORTS", height=35, corner_radius=6,
-                                             font=ctk.CTkFont(size=12, weight="bold"),
-                                             fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
-                                             hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
-                                             command=lambda: self.select_tab("reports"))
+                                               font=ctk.CTkFont(size=12, weight="bold"),
+                                               fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
+                                               hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
+                                               command=lambda: self.select_tab("reports"))
         self.btn_nav_reports.grid(row=6, column=0, padx=15, pady=2, sticky="ew") 
 
         # [MARKALAMA DÜZELTMESİ] PARS AI -> SYNARA AI
         self.btn_nav_ai = ctk.CTkButton(sidebar, text="🧠 SYNARA AI", height=35, corner_radius=6,
-                                             font=ctk.CTkFont(size=12, weight="bold"),
-                                             fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
-                                             hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
-                                             command=lambda: self.select_tab("ai"))
+                                               font=ctk.CTkFont(size=12, weight="bold"),
+                                               fg_color="transparent", text_color=self.COLOR_TEXT_SECONDARY,
+                                               hover_color=self.COLOR_TERMINAL_FRAME, anchor="w",
+                                               command=lambda: self.select_tab("ai"))
         self.btn_nav_ai.grid(row=7, column=0, padx=15, pady=2, sticky="ew")
         
         ctk.CTkFrame(sidebar, fg_color="transparent", height=0).grid(row=8, column=0, sticky="nsew") 
@@ -641,7 +642,11 @@ class MestegApp(ctk.CTk):
             self.entry_url.delete(0, "end")
             self.entry_url.insert(0, url)
 
-        selected_profile = self.profile_select.get()
+        # GÜNCELLENDİ: Profil seçimini dropdown'dan al
+        if hasattr(self, 'profile_select'):
+            selected_profile = self.profile_select.get()
+        else:
+            selected_profile = "BUG_BOUNTY_CORE"
         
         self.btn_scan.configure(
             state="normal", 
@@ -722,10 +727,10 @@ class MestegApp(ctk.CTk):
         self.lbl_status_dot.configure(text="● COMPLETED", text_color=self.COLOR_SUCCESS)
         
         self.log_to_gui(" ", "INFO")
-        self.log_to_gui("  ╔════════════════════════════════════════════════╗", "SUCCESS")
-        self.log_to_gui("  ║        SCAN SUCCESSFULLY COMPLETED             ║", "SUCCESS")
-        self.log_to_gui(f"  ║       Final Security Score: {score:.1f}/100           ║", "SUCCESS")
-        self.log_to_gui("  ╚════════════════════════════════════════════════╝", "SUCCESS")
+        self.log_to_gui("  ╔════════════════════════════════════════════════╗", "SUCCESS")
+        self.log_to_gui("  ║        SCAN SUCCESSFULLY COMPLETED             ║", "SUCCESS")
+        self.log_to_gui(f"  ║       Final Security Score: {score:.1f}/100           ║", "SUCCESS")
+        self.log_to_gui("  ╚════════════════════════════════════════════════╝", "SUCCESS")
         self.log_to_gui(" ", "INFO")
         
         msg = f"Scan Completed.\nSecurity Score: {score:.1f}/100"

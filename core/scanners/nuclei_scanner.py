@@ -1,186 +1,232 @@
 # path: core/scanners/nuclei_scanner.py
-
-import subprocess
-import json
 import asyncio
+import json
+import logging
 import shutil
 import os
-from typing import Callable, List, Dict, Any
-from urllib.parse import urlparse
-
+from typing import List, Dict, Any
 from core.scanners.base_scanner import BaseScanner
+
+# Standart logger yerine PARS motorunun log mekanizması kullanılacak
+# logger = logging.getLogger(__name__)
 
 class NucleiScanner(BaseScanner):
     """
-    Sistemde yüklü olan 'nuclei' aracını çalıştırarak geniş kapsamlı zafiyet taraması yapar.
-    Nuclei'nin JSON çıktısını parse eder ve Synara raporlama formatına dönüştürür.
-    
-    Gereksinim: Sistemde 'nuclei' komutunun çalıştırılabilir ve PATH'e ekli olması gerekir.
+    ProjectDiscovery Nuclei aracı için asenkron sarmalayıcı (wrapper).
+    PARS mimarisine uygun olarak non-blocking (bloklamayan) çalışır.
     """
-    
-    # Nuclei komut şablonu
-    NUCLEI_CMD = ["nuclei", "-u", "TARGET_URL", "-silent", "-json", "-nc"]
-    
-    # YENİ: Nuclei için maksimum çalışma süresi (Saniye)
-    # Donmaları önlemek için 180 saniye (3 dakika) sınır koyuyoruz.
-    SCAN_TIMEOUT = 180 
+
+    def __init__(self, log_callback=None, result_callback=None, request_callback=None, *args, **kwargs):
+        # BaseScanner __init__ metoduna argümanları iletiyoruz
+        # Eğer BaseScanner bu argümanları doğrudan almıyorsa, manuel atama yapıyoruz.
+        super().__init__(log_callback, result_callback, request_callback, *args, **kwargs)
+        
+        # Eğer üst sınıf (BaseScanner) bu atamaları yapmıyorsa garantiye alalım:
+        if not hasattr(self, 'log'): self.log = log_callback if log_callback else self._dummy_log
+        if not hasattr(self, 'add_result'): self.add_result = result_callback
+        
+        self.binary_path = self._check_binary()
+        self.description = "Advanced vulnerability scanning using ProjectDiscovery Nuclei (Async)"
+
+    def _dummy_log(self, msg, level="INFO"):
+        pass
 
     @property
-    def name(self):
-        return "Nuclei Entegrasyon Motoru"
+    def name(self) -> str:
+        return "Nuclei Scanner"
 
     @property
-    def category(self):
+    def category(self) -> str:
         return "NUCLEI"
-        
-    def __init__(self, logger, results_callback, request_callback: Callable[[], None]):
-        super().__init__(logger, results_callback, request_callback)
-        # Nuclei yolunu bulmaya çalış
-        self.nuclei_path = self._find_nuclei_path()
 
-    def _find_nuclei_path(self):
+    def _check_binary(self) -> str:
         """
-        Nuclei çalıştırılabilir dosyasını bulmaya çalışır ve detaylı log basar.
+        Nuclei binary dosyasının sistemde (PATH) olup olmadığını kontrol eder.
         """
-        # 1. Sistem PATH kontrolü
         path = shutil.which("nuclei")
-        if path:
-            self.log(f"[NUCLEI DEBUG] PATH üzerinde bulundu: {path}", "INFO")
-            return path
+        if not path:
+            # Windows uyumluluğu için
+            path = shutil.which("nuclei.exe")
             
-        self.log("[NUCLEI DEBUG] PATH üzerinde bulunamadı. Alternatif yollar taranıyor...", "WARNING")
-        
-        # 2. Yaygın Windows Kurulum Yolları (Fallback)
-        common_paths = [
-            r"C:\Tools\Nuclei\nuclei.exe",           # Senin ekran görüntündeki yol
-            r"C:\Tools\nuclei.exe",
-            r"C:\Program Files\Nuclei\nuclei.exe",
-            os.path.expanduser(r"~\go\bin\nuclei.exe"),
-            os.path.join(os.getenv('USERPROFILE'), r"go\bin\nuclei.exe"),
-            # Ekstra varyasyonlar
-            r"C:\Users\Synara\go\bin\nuclei.exe",
-        ]
-        
-        for p in common_paths:
-            exists = os.path.exists(p)
-            # Hata ayıklama için her denemeyi logla
-            if exists:
-                self.log(f"[NUCLEI DEBUG] Yedek yolda BULUNDU: {p}", "SUCCESS")
-                return p
-            else:
-                # Sadece geliştirme aşamasında görünmesi için (Production'da kaldırılabilir)
-                # self.log(f"[NUCLEI DEBUG] Kontrol edildi (Yok): {p}", "INFO")
-                pass
-                
-        self.log("[NUCLEI DEBUG] Hiçbir yolda Nuclei bulunamadı.", "CRITICAL")
-        return None
+        if not path:
+            self.log("Nuclei binary not found in system PATH! Scanner will be disabled.", "CRITICAL")
+            return None
+        return path
 
-    async def scan(self, url: str, session, completed_callback: Callable[[], None]):
+    async def scan(self, target: str, session=None, callback=None, **kwargs) -> List[Dict[str, Any]]:
         """
-        Nuclei taramasını başlatır ve sonuçları işler.
+        Hedef üzerinde asenkron Nuclei taraması gerçekleştirir.
         """
-        if not self.nuclei_path:
-            self.log(f"[{self.category}] HATA: 'nuclei' aracı bulunamadı.", "CRITICAL")
-            self.log(f"[{self.category}] Lütfen C:\\Tools\\Nuclei\\nuclei.exe yolunun doğru olduğundan emin olun.", "INFO")
-            self.add_result(self.category, "INFO", "Nuclei aracı yüklü değil, tarama atlandı.", 0)
-            completed_callback()
+        results = []
+        try:
+            if not self.binary_path:
+                self.log("Scan aborted: Nuclei binary is missing.", "ERROR")
+                if self.add_result:
+                    self.add_result("NUCLEI", "INFO", "Nuclei binary bulunamadı, tarama atlandı.", 0.0)
+                return []
+
+            # kwargs içinden options al, yoksa boş dict
+            options = kwargs.get("options", {})
+            
+            # Nuclei Parametreleri
+            cmd_args = [
+                "-target", target,
+                "-json",
+                "-silent",
+                "-nc"
+            ]
+
+            if options.get("templates"):
+                for temp in options["templates"]:
+                    cmd_args.extend(["-t", temp])
+
+            rate_limit = str(options.get("rate_limit", 150))
+            concurrency = str(options.get("concurrency", 25))
+            
+            cmd_args.extend(["-rl", rate_limit])
+            cmd_args.extend(["-c", concurrency])
+
+            if options.get("tags"):
+                cmd_args.extend(["-tags", options["tags"]])
+
+            self.log(f"Starting async Nuclei scan on {target} [RL:{rate_limit}, C:{concurrency}]", "INFO")
+            
+            # --- ÇAKIŞMA ÖNLEME (FIX) ---
+            # Nuclei'nin, PARS'ın Gemini API anahtarını kendi Google Search modülü 
+            # sanmasını ve "CX ID eksik" hatası vermesini önlemek için ortamı temizliyoruz.
+            nuclei_env = os.environ.copy()
+            if "GOOGLE_API_KEY" in nuclei_env:
+                del nuclei_env["GOOGLE_API_KEY"]
+            if "GOOGLE_API_CX" in nuclei_env:
+                del nuclei_env["GOOGLE_API_CX"]
+            # ----------------------------
+
+            process = None
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    self.binary_path,
+                    *cmd_args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=nuclei_env # Temizlenmiş ortamı kullan
+                )
+
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    
+                    try:
+                        decoded_line = line.decode().strip()
+                        if not decoded_line:
+                            continue
+                        
+                        vuln_data = json.loads(decoded_line)
+                        parsed_vuln = self._parse_nuclei_output(vuln_data)
+                        
+                        if parsed_vuln:
+                            results.append(parsed_vuln)
+                            # Bulguyu engine'e raporla
+                            self._report_finding(parsed_vuln)
+                            # Log çıktısı
+                            self.log(f"Nuclei found: {parsed_vuln['name']} ({parsed_vuln['severity']})", "WARNING")
+
+                    except json.JSONDecodeError:
+                        pass
+                    except Exception as e:
+                        self.log(f"Error parsing Nuclei line: {e}", "ERROR")
+
+                await process.wait()
+
+                stderr_output = await process.stderr.read()
+                if stderr_output and process.returncode != 0:
+                    # Stderr çıktısını decode edip temizleyelim
+                    err_msg = stderr_output.decode().strip()
+                    if err_msg:
+                        # Eğer hata "context deadline exceeded" gibi önemsiz bir şeyse INFO bas
+                        if "context deadline exceeded" in err_msg:
+                            pass 
+                        else:
+                            self.log(f"Nuclei stderr output: {err_msg}", "WARNING")
+
+            except asyncio.CancelledError:
+                self.log(f"Nuclei scan cancelled for {target}. Terminating process...", "WARNING")
+                if process:
+                    try:
+                        process.terminate()
+                        await process.wait()
+                    except Exception:
+                        pass
+                raise
+
+            except Exception as e:
+                self.log(f"Critical error executing Nuclei: {e}", "CRITICAL")
+                if self.add_result:
+                    self.add_result("NUCLEI", "CRITICAL", f"Nuclei Execution Error: {str(e)}", 0.0)
+
+            self.log(f"Nuclei scan completed for {target}. Total findings: {len(results)}", "SUCCESS")
+            return results
+
+        finally:
+            # Motorun kilitlenmemesi için callback MUTLAKA çağrılmalı
+            if callback:
+                callback()
+
+    def _parse_nuclei_output(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Nuclei ham JSON çıktısını standart PARS zafiyet formatına dönüştürür.
+        """
+        try:
+            info = data.get("info", {})
+            severity = info.get("severity", "unknown").lower()
+
+            if severity not in ["low", "medium", "high", "critical"]:
+                return None
+
+            return {
+                "type": "vulnerability",
+                "scanner": "Nuclei",
+                "name": info.get("name", data.get("template-id", "Unknown Issue")),
+                "severity": severity,
+                "description": info.get("description", "No description provided."),
+                "url": data.get("matched-at"),
+                "curl_command": data.get("curl-command", ""),
+                "matcher_name": data.get("matcher-name", ""),
+                "template_id": data.get("template-id"),
+                "timestamp": data.get("timestamp"),
+                "evidence": data.get("extracted-results", [])
+            }
+        except Exception as e:
+            self.log(f"Error normalising Nuclei data: {e}", "ERROR")
+            return None
+
+    def _report_finding(self, vuln_data):
+        """
+        Bulguyu engine'e raporlar.
+        """
+        if not hasattr(self, 'add_result') or not self.add_result:
             return
 
-        self.log(f"[{self.category}] Nuclei motoru başlatılıyor... (Yol: {self.nuclei_path})", "INFO")
-
-        try:
-            # Komutu hazırla
-            cmd = [self.nuclei_path] + self.NUCLEI_CMD[1:] 
-            cmd[2] = url 
-            
-            # Subprocess'i asenkron olarak çalıştır
-            startupinfo = None
-            if os.name == 'nt':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                startupinfo=startupinfo
-            )
-
-            # KRİTİK GÜNCELLEME: wait_for ile zaman aşımı ekliyoruz.
-            # Eğer Nuclei takılırsa, timeout süresi sonunda process kill edilir.
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.SCAN_TIMEOUT)
-            except asyncio.TimeoutError:
-                self.log(f"[{self.category}] ZAMAN AŞIMI: Nuclei {self.SCAN_TIMEOUT} saniyede tamamlanamadı. İşlem sonlandırılıyor...", "WARNING")
-                try:
-                    process.kill()
-                except:
-                    pass
-                self.add_result(self.category, "WARNING", "Nuclei taraması zaman aşımına uğradı ve durduruldu.", 0)
-                completed_callback()
-                return
-
-            if stderr:
-                err_msg = stderr.decode(errors='ignore').strip()
-                if err_msg and "error" in err_msg.lower():
-                    self.log(f"[{self.category}] Nuclei stderr: {err_msg}", "INFO")
-
-            if stdout:
-                output = stdout.decode(errors='ignore')
-                self._process_nuclei_output(output)
-            else:
-                self.log(f"[{self.category}] Nuclei taraması tamamlandı (Bulgu yok).", "INFO")
-                self.add_result(self.category, "INFO", "Nuclei taraması tamamlandı. Kritik bulgu yok.", 0)
-
-        except Exception as e:
-            self.log(f"[{self.category}] Kritik Çalıştırma Hatası: {str(e)}", "CRITICAL")
-            self.add_result(self.category, "CRITICAL", f"Nuclei çalıştırılamadı: {str(e)}", 0)
-            
-        completed_callback()
-
-    def _process_nuclei_output(self, output: str):
-        """
-        Nuclei'nin JSON çıktısını (her satır bir JSON objesidir) işler.
-        """
-        count = 0
-        for line in output.splitlines():
-            if not line.strip(): continue
-            
-            try:
-                data = json.loads(line)
-                self._map_nuclei_to_synara(data)
-                count += 1
-            except json.JSONDecodeError:
-                continue
-        
-        if count > 0:
-             self.log(f"[{self.category}] Nuclei {count} adet bulgu raporladı.", "SUCCESS")
-
-    def _map_nuclei_to_synara(self, data: Dict[str, Any]):
-        """
-        Tek bir Nuclei bulgusunu Synara sonuç formatına çevirir.
-        """
         severity_map = {
             "critical": "CRITICAL",
             "high": "HIGH",
             "medium": "WARNING",
-            "low": "INFO",
-            "info": "INFO",
-            "unknown": "INFO"
+            "low": "INFO"
         }
         
-        nuclei_severity = data.get("info", {}).get("severity", "info").lower()
-        level = severity_map.get(nuclei_severity, "INFO")
+        level = severity_map.get(vuln_data['severity'], "INFO")
+        message = f"{vuln_data['name']} detected at {vuln_data['url']}"
         
-        template_id = data.get("template-id", "unknown-template")
-        name = data.get("info", {}).get("name", template_id)
-        matched_at = data.get("matched-at", "")
+        # Basit CVSS skor mapping
+        cvss_score = 0.0
+        if level == "CRITICAL": cvss_score = 9.0
+        elif level == "HIGH": cvss_score = 7.0
+        elif level == "WARNING": cvss_score = 4.0
         
-        message = f"[{template_id}] {name} - Tespit: {matched_at}"
-        
-        cvss_score = data.get("info", {}).get("classification", {}).get("cvss-score", 0.0)
-        
-        if cvss_score == 0.0:
-            cvss_score = self._calculate_score_deduction(level)
-            
-        self.add_result(self.category, level, message, cvss_score)
+        self.add_result(
+            category="NUCLEI",
+            level=level,
+            message=message,
+            cvss_score=cvss_score,
+            poc_data={"url": vuln_data['url'], "evidence": vuln_data.get('evidence')}
+        )

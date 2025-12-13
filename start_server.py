@@ -7,8 +7,8 @@ import webbrowser
 
 def install_dependencies():
     """Eksik kütüphaneleri otomatik yükler"""
-    # GÜNCELLENDİ: selenium, webdriver-manager, jinja2 ve pdfkit eklendi
-    required_packages = ["fastapi", "uvicorn", "python-dotenv", "selenium", "webdriver-manager", "jinja2", "pdfkit", "matplotlib","wkhtmltopdf",]
+    # FAZ 27 GÜNCELLEMESİ: SQLAlchemy eklendi
+    required_packages = ["fastapi", "uvicorn", "python-dotenv", "selenium", "webdriver-manager", "jinja2", "pdfkit", "matplotlib", "wkhtmltopdf", "sqlalchemy"] 
     print("[*] Sunucu gereksinimleri kontrol ediliyor...")
     
     for package in required_packages:
@@ -17,15 +17,17 @@ def install_dependencies():
             import_name = package.replace("-", "_")
             if package == "python-dotenv": import_name = "dotenv"
             
+            # Eğer paket yüklüyse ve import edilebiliyorsa, atla
             __import__(import_name)
         except ImportError:
             print(f"[!] {package} eksik, yükleniyor...")
             try:
+                # sys.executable, betiği çalıştıran Python'ı (genellikle sanal ortamdaki) kullanır.
                 subprocess.check_call([sys.executable, "-m", "pip", "install", package])
                 print(f"[OK] {package} yüklendi.")
             except Exception as e:
                 print(f"[HATA] {package} yüklenemedi: {e}")
-                print("İpucu: Eğer 'pip' bulunamadı hatası alıyorsanız, 'python -m pip install ...' deneyin.")
+                print("İpucu: Lütfen sanal ortamın aktif olduğundan emin olun.")
                 input("Hata oluştu. Çıkmak için Enter'a basın.")
                 sys.exit(1)
     print("[OK] Tüm kütüphaneler hazır.\n")
@@ -41,11 +43,11 @@ def run_server():
     print("-" * 50)
     
     # Sunucu komutu: uvicorn api_server:app --reload
-    # Not: Port 8000 kullanılıyor. Web Dashboard'da API_BASE_URL'i buna göre güncellemeliyiz.
+    # sys.executable, start_server.py'yi çalıştıran Python yorumlayıcısını (venv veya global) kullanır.
     cmd = [sys.executable, "-m", "uvicorn", "api_server:app", "--host", "127.0.0.1", "--port", "8000", "--reload"]
     
     try:
-        # Tarayıcıda dokümantasyonu aç (opsiyonel, sunucunun açılması için 2sn bekle)
+        # Tarayıcıda dokümantasyonu aç (opsiyonel)
         # time.sleep(2)
         # webbrowser.open("http://127.0.0.1:8000/docs")
         
@@ -57,8 +59,9 @@ def run_server():
         input("Kapatmak için Enter...")
 
 if __name__ == "__main__":
-    # Çalışma dizinini ayarla
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    # Çalışma dizinini, uvicorn'un 'api_server' modülünü bulabilmesi için ayarla
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(project_root)
     
     install_dependencies()
     run_server()

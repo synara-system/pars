@@ -12,20 +12,16 @@ import re # Hostname temizliği için eklendi
 # --- KRİTİK AYAR: wkhtmltopdf YOLU ---
 # pdfkit'in wkhtmltopdf aracını bulması için manuel yolu belirtme (wkhtmltopdf PATH'e ekli değilse gerekli)
 # Lütfen bu yolu kendi sisteminizdeki KURULUM YOLU ile değiştirin!
-# KRİTİK DÜZELTME: Bu path, Python kodu içinde yer alamaz. PyInstaller, harici binary'leri (wkhtmltopdf gibi)
-# .exe içinde taşımaz, bu yüzden yerel sistemdeki yolu kullanmaya devam etmeliyiz.
-# Eğer kullanıcı wkhtmltopdf'i PATH'e eklemediyse, bu yolu manuel olarak düzeltmeli.
-# Ancak, biz bu hatayı yakalayıp loglayacağız.
 WKHTMLTOPDF_PATH = r'C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe'
 # Eğer PATH'inizde kuruluysa, boş dize bırakabilirsiniz: WKHTMLTOPDF_PATH = "" 
 
 class SynaraReporter:
     """
-    Raporlama sınıfı. SynaraScannerEngine verilerini kullanarak
-    HTML ve PDF formatÄ±nda gÃ¼venlik raporlarÄ± oluÅŸturur.
+    Raporlama sınıfı. SynaraScannerEngine verilerini ReportManager/DB üzerinden kullanarak
+    HTML ve PDF formatında güvenlik raporları oluşturur.
     """
     def __init__(self, engine):
-        # Engine objesini referans olarak tutar, böylece tüm verilere (score, results vb.) erişebilir.
+        # Engine objesini referans olarak tutar, böylece tüm verilere (score, report_manager vb.) erişebilir.
         self.engine = engine
         self.folder_name = "reports"
         
@@ -51,7 +47,7 @@ class SynaraReporter:
             
             # Hostname'i temizle (port, www. kaldır, noktaları alt çizgiye çevir)
             if ':' in netloc:
-                 netloc = netloc.split(':')[0] # Portu kaldır
+                netloc = netloc.split(':')[0] # Portu kaldır
             if netloc.startswith('www.'):
                 netloc = netloc[4:]
             
@@ -70,7 +66,7 @@ class SynaraReporter:
         KRİTİK DÜZELTME: sys.frozen kontrolü ve MEIPASS kullanımı.
         """
         # --- PYINSTALLER UYUMLU KAYNAK YOLU KONTROLÜ ---
-        # Eğer program paketlenmişse, kaynak dosyaları sys._MEIPASS (veya os.path.dirname(sys.executable)) altında olacaktır.
+        # Eğer program paketlenmişse, kaynak dosyaları sys._MEIPASS (ve ya os.path.dirname(sys.executable)) altında olacaktır.
         if getattr(sys, 'frozen', False):
             # Dosyalarımız EXE'nin içinde ve 'core/templates' yolunda paketlendi.
             # Base path'i sys._MEIPASS olarak almalıyız.
@@ -149,7 +145,7 @@ class SynaraReporter:
             
         except OSError as e:
             # wkhtmltopdf bulunamadı hatası (WKHTMLTOPDF_PATH'in yanlış ayarlandığı anlamına gelir)
-            error_message = f"HATA: PDF DönüşümÃ¼ BaÅŸarÄ±sÄ±z. Lütfen WKHTMLTOPDF_PATH'i kontrol edin veya PATH'e ekleyin. Detay: {e}"
+            error_message = f"HATA: PDF Dönüşümü Başarısız. Lütfen WKHTMLTOPDF_PATH'i kontrol edin veya PATH'e ekleyin. Detay: {e}"
             print(error_message)
             return None
         except Exception as e:
@@ -166,16 +162,27 @@ class SynaraReporter:
             print("[RAPORLAMA] HATA: Jinja2 şablonu yüklenemediği için rapor oluşturulamıyor.")
             return None, None 
             
+        # FAZ 27: Eğer ReportManager yüklü değilse (DB hatası), rapor oluşturma atlanır.
+        if not self.engine.report_manager or not self.engine.report_manager.scan_id:
+            print("[RAPORLAMA] KRİTİK HATA: Veritabanı Tarama Kaydı bulunamadı. Rapor oluşturulamıyor.")
+            return None, None
+            
         timestamp_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         html_path, pdf_path = self._get_report_path(timestamp_str)
         
         if not html_path:
             return None, None
             
-        # Motor verilerini hazırla
+        # Motor verilerini DB'den çek
         score = max(0, int(self.engine.score)) # Faz 10: Skoru int olarak göster
-        results = self.engine.results
+        
+        # KRİTİK DEĞİŞİKLİK: Zafiyetleri DB'den ReportManager aracılığıyla çek
+        results = self.engine.report_manager.get_vulnerabilities() 
+        
         target_url = self.engine.target_url
+        
+        # Start Time DB'de olduğu için, Engine'daki start_time'ı kullanmak yerine 
+        # Scan kaydından çekmek idealdir. Ancak Engine'da tutulduğu için şimdilik Engine'ı kullanıyoruz.
         scan_duration = datetime.datetime.now() - self.engine.start_time
         duration_str = str(scan_duration).split('.')[0]
         
@@ -188,6 +195,7 @@ class SynaraReporter:
             total_duration_ms = scan_duration.total_seconds() * 1000
             avg_response_time_ms = f"{total_duration_ms / total_requests:.2f} ms"
         
+        # Not: results artık DB'den çekilen zafiyet listesidir (to_dict formatında)
         template_context = {
             "score": score,
             "results": results,

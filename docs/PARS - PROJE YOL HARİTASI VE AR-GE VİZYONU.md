@@ -2,7 +2,7 @@ PARS - PROJE YOL HARİTASI VE AR-GE VİZYONU
 
 "Sadece bulma, anla ve sömür." - Synara AI Felsefesi
 
-📅 GÜNCEL DURUM (v2.7 - VERİ TABANI GEÇİŞİ)
+📅 GÜNCEL DURUM (v2.6 - SÜREKLİ EVRİM MODU)
 
 [x] Mimari Ayrımı: Backend (FastAPI) ve Frontend (Web Dashboard) ayrıldı.
 [x] Bulut Uyumu: Render ve Docker deploy süreçleri tamamlandı.
@@ -42,7 +42,7 @@ PARS - PROJE YOL HARİTASI VE AR-GE VİZYONU
 [x] FAZ 24: PASİF KRİTİK VERİ SIZINTISI (PII LEAKAGE)
 [x] FAZ 25: NEURAL TAKTİK MÜDAHALE
 [x] FAZ 26: CORE ENGINE OPTİMİZASYONU
-[P] FAZ 27: VERİ TABANI VE KALICILIK KATMANI (SQLite/ORM): RAM tabanlı veri yapısından kalıcı veri tabanına geçiş. (PLANLANDI)
+[ ] FAZ 27: VERİ TABANI VE KALICILIK KATMANI (SQLite/ORM): RAM tabanlı veri yapısından kalıcı veri tabanına geçiş.
 [x] FAZ 29: HYBRID NEURAL MOTOR
 [x] FAZ 30: MODÜL HATA TAŞIYICI
 [x] FAZ 31: CLIENT LOGIC ANALYZER GÜÇLENDİRMESİ

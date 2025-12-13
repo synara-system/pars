@@ -6,18 +6,18 @@ import asyncio
 import re
 import json
 from typing import Callable, Set, Any, Dict
+from urllib.parse import parse_qs 
 
 from core.scanners.base_scanner import BaseScanner
 
 
 class PreScanner(BaseScanner):
     """
-    Deep Vision v3.3 – Hibrit Parametre Keşfi (Modern + Legacy)
+    Deep Vision v3.8 – Hibrit Parametre Keşfi
     
-    YENİLİKLER (v3.3):
-    - Legacy Form Hunter: Eski tip <form> ve <input> yapılarını garantili tespit eder.
-    - Deep Vision v3.2: Modern (JSON/JS) parametre keşfini korur.
-    - TR-GUARD & Noise Filter: Gürültü temizleme özelliği aktif.
+    YENİLİKLER (v3.8):
+    - Ultra Agresif Query Hunter: HTML'deki herhangi bir nitelik (attribute) değerinde 
+      gizlenmiş sorgu parametrelerini (id, cat vb.) en basit ve en agresif desenle keşfeder.
     """
 
     # Modern JS/HTML attribute regex'i (React props, Angular directives vb. için)
@@ -26,11 +26,15 @@ class PreScanner(BaseScanner):
         r'["\']?([a-zA-Z0-9_\-]+)["\']?\s*:',                              # JS/JSON key
         re.IGNORECASE
     )
+    
+    # Ultra Agresif Query Hunter Regex: HTML içinde '?QUERY_STRING"' desenini arar.
+    QUERY_URL_PATTERN = re.compile(r'\?([^"\']+)["\']', re.IGNORECASE)
+
 
     # Anahtar kelime grupları
     SECURITY_HINT = {"token", "session", "auth", "key", "secret", "uid", "user", "pass", "pwd", "login"}
-    STRUCTURAL_HINT = {"id", "file", "path", "page", "index", "view"}
-    BEHAVIORAL_HINT = {"search", "query", "filter", "sort", "event", "submit", "btn"}
+    STRUCTURAL_HINT = {"id", "file", "path", "page", "index", "view", "cat", "category"} 
+    BEHAVIORAL_HINT = {"search", "query", "filter", "sort", "event", "submit", "btn", "q"} 
 
     # Gürültü Filtresi (Static Noise + TR Guard)
     STATIC_NOISE = {
@@ -75,7 +79,7 @@ class PreScanner(BaseScanner):
 
     @property
     def name(self):
-        return "Gelişmiş Parametre Keşfi (Deep Vision v3.3 + Legacy Hunter)"
+        return "Gelişmiş Parametre Keşfi (Deep Vision v3.8)"
 
     @property
     def category(self):
@@ -128,21 +132,23 @@ class PreScanner(BaseScanner):
 
         p_lower = p.lower()
 
+        # Kritik kısa parametrelerin uzunluk filtresine takılmasını önle
         if len(p) < 2 or len(p) > 50:
-             if p_lower not in ["id", "uid", "key", "q", "p"]:
-                 return False
+            if p_lower not in ["id", "uid", "key", "q", "p", "cat", "view"]:
+                return False
 
         if p_lower in self.STATIC_NOISE:
             return False
             
         if p.startswith(('--', 'rs-', 'rk-', 'clip', 'mask', 'filter', 'paint', 'radix-', '-')): 
-             return False
-             
-        if len(p) <= 3 and re.match(r"^[a-zA-Z]{1}\d+$", p_lower):
             return False
             
-        if 3 <= len(p) <= 5 and re.match(r"^[a-z0-9]+$", p_lower) and not any(k in p_lower for k in self.SECURITY_HINT | self.STRUCTURAL_HINT):
-             return False
+        if len(p) <= 3 and re.match(r"^[a-zA-Z]{1}\d+$", p_lower):
+            return False
+        
+        # Agresif Alfanumerik Filtrenin gevşetilmesi
+        if 3 <= len(p) <= 5 and re.match(r"^[a-z0-9]+$", p_lower) and not any(k in p_lower for k in self.SECURITY_HINT | self.STRUCTURAL_HINT | self.BEHAVIORAL_HINT):
+            return False
 
         if " " in p:
             return False
@@ -153,7 +159,7 @@ class PreScanner(BaseScanner):
     # ANA TARAYICI
     # ----------------------------------------------------------------------
     async def scan(self, url: str, session: aiohttp.ClientSession, completed_callback: Callable[[], None]):
-        self.log(f"[{self.category}] Deep Vision v3.3 analizi başlatıldı...", "INFO")
+        self.log(f"[{self.category}] Deep Vision v3.8 analizi başlatıldı...", "INFO")
 
         discovered: Dict[str, Dict[str, str]] = {}
 
@@ -166,10 +172,12 @@ class PreScanner(BaseScanner):
                     text = await res.text()
 
                     # 1. HTML FORM ANALİZİ (Legacy Hunter)
-                    # Regex'in kaçırabileceği <input> alanlarını özel olarak tarar.
                     self._extract_html_forms(text, discovered)
+                    
+                    # 2. URL SORGUSU ANALİZİ (Query Hunter)
+                    self._extract_url_queries(text, discovered) 
 
-                    # 2. JSON ANALİZİ (Modern Apps)
+                    # 3. JSON ANALİZİ (Modern Apps)
                     if "application/json" in content_type or "__NEXT_DATA__" in text:
                         try:
                             if "__NEXT_DATA__" in text:
@@ -178,18 +186,16 @@ class PreScanner(BaseScanner):
                                     json_data = json.loads(json_match.group(1))
                                     self._extract_json(json_data, discovered)
                             else:
-                                # Sadece saf JSON yanıtlarında
                                 if "application/json" in content_type:
                                     json_data = await res.json()
                                     self._extract_json(json_data, discovered)
                         except Exception:
                             pass
 
-                    # 3. GENEL REGEX ANALİZİ (Fallback)
+                    # 4. GENEL REGEX ANALİZİ (Fallback)
                     for m in self.PARAM_PATTERN.finditer(text):
                         p = m.group(1) or m.group(2)
                         if self._is_valid_param(p):
-                            # Eğer form analizinden gelmediyse ekle
                             if p not in discovered:
                                 discovered[p] = {
                                     "level": self._classify_param(p),
@@ -217,9 +223,9 @@ class PreScanner(BaseScanner):
                     break
 
             except aiohttp.client_exceptions.ClientConnectorError as e:
-                 self.log(f"[{self.category}] Erişim hatası (Connection Error): {type(e).__name__}", "CRITICAL")
-                 if attempt == self.MAX_RETRIES - 1:
-                     self.add_result(self.category, "CRITICAL", f"Erişim hatası: {type(e).__name__}", 5)
+                self.log(f"[{self.category}] Erişim hatası (Connection Error): {type(e).__name__}", "CRITICAL")
+                if attempt == self.MAX_RETRIES - 1:
+                    self.add_result(self.category, "CRITICAL", f"Erişim hatası: {type(e).__name__}", 5)
             except Exception as e:
                 if attempt == self.MAX_RETRIES - 1:
                     self.add_result(self.category, "CRITICAL", f"Beklenmedik Hata: {type(e).__name__}", 5)
@@ -229,15 +235,39 @@ class PreScanner(BaseScanner):
         completed_callback()
 
     # ----------------------------------------------------------------------
+    # URL Query Extractor (Query Hunter)
+    # ----------------------------------------------------------------------
+    def _extract_url_queries(self, content: str, discovered: Dict[str, Dict[str, str]]):
+        """
+        HTML içeriğindeki linklerden, form action'lardan ve diğer niteliklerden sorgu parametrelerini (ör. ?id=1) çıkarır.
+        """
+        for m in self.QUERY_URL_PATTERN.finditer(content):
+            # m.group(1) sorgu dizesini yakalar, örn: id=1&cat=fashion
+            query_string = m.group(1) 
+            
+            try:
+                # parse_qs fonksiyonu, sorgu dizesini ayrıştırır.
+                parsed_query = parse_qs(query_string, keep_blank_values=True)
+            except Exception:
+                continue
+
+            for p in parsed_query:
+                if self._is_valid_param(p):
+                    if p not in discovered:
+                        discovered[p] = {
+                            "level": self._classify_param(p),
+                            "source": "HTML-QUERY-STRING",
+                            "mutable": "YES"
+                        }
+
+    # ----------------------------------------------------------------------
     # HTML Form Extractor (Legacy Hunter)
     # ----------------------------------------------------------------------
     def _extract_html_forms(self, content: str, discovered: Dict[str, Dict[str, str]]):
         """
         HTML içeriğindeki <input>, <textarea>, <select> elemanlarının 'name' niteliklerini toplar.
-        Regex yerine daha spesifik desenler kullanılır.
         """
         # Input pattern: <input ... name="X" ...>
-        # Basit regex ama name attribute'unu hedef alır.
         input_matches = re.finditer(r'<input[^>]+name=["\']([^"\']+)["\']', content, re.IGNORECASE)
         for m in input_matches:
             name = m.group(1)

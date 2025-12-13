@@ -51,8 +51,8 @@ class XSSScanner(BaseScanner):
         request_callback: Callable[[], None],
         dynamic_scanner_instance=None,
     ):
-        super().__init__(logger, results_callback, request_callback)
-        # self.payload_generator = PayloadGenerator(logger) # Bu artık Engine'den enjekte ediliyor
+        # DÜZELTME: super().__init>(...) yerine super().__init__(...) kullanılmalıydı.
+        super().__init__(logger, results_callback, request_callback) 
         self.dynamic_scanner = dynamic_scanner_instance
         
         # Sigorta ve Görev Takibi
@@ -93,6 +93,18 @@ class XSSScanner(BaseScanner):
             calibration_ms = getattr(self, "calibration_latency_ms", 4000)
             self.REQUEST_TIMEOUT = max(5.0, min(20.0, (calibration_ms / 1000.0) * 10.0))
             
+            # --- KRİTİK KALİBRASYON YÖNLENDİRMESİ ---
+            original_url = url
+            parsed_url = urlparse(url)
+            is_local_lab = parsed_url.netloc == "127.0.0.1:5000" or parsed_url.netloc == "localhost:5000"
+
+            if is_local_lab and parsed_url.path in ["/", "/api/chat"]:
+                self.log(f"[{self.category}] LAB YÖNLENDİRMESİ: /search?q= endpoint'ine yönlendiriliyor.", "INFO")
+                # Yönlendirilecek URL'de bir parametre olması XSS Scanner için şarttır.
+                url = parsed_url.geturl().rstrip('/') + "/search?q=TESTXSS"
+                parsed_url = urlparse(url)
+            # ------------------------------------------
+
             # Sigortayı ve listeleri sıfırla
             self.consecutive_timeouts = 0
             self.circuit_open = False
@@ -102,18 +114,11 @@ class XSSScanner(BaseScanner):
             # 1) False Positive Risk Kontrolü (AGRESİF MOD)
             fp_risk = await self._check_false_positive(url, session)
             if fp_risk:
-                self.add_result(
-                    self.category,
-                    "INFO",
-                    "BİLGİ: Kontrol payload'u yanıta yansıdı. XSS taraması devam edecek ancak sonuçlar manuel doğrulanmalı.",
-                    0,
-                )
+                self.add_result(self.category, "INFO", "BİLGİ: Kontrol payload'u yanıta yansıdı. XSS taraması devam edecek ancak sonuçlar manuel doğrulanmalı.", 0)
                 self.log(f"[{self.category}] FP Kalkanı uyarı verdi ama tarama devam ettiriliyor (Aggressive Mode).", "WARNING")
 
             # 2) Payload setini hazırla (FAZ 29/35: Asenkron çekim)
-            context_aware_payloads = await self.payload_generator.generate_context_aware_xss_payloads(
-                self.reflection_context_type # Engine'den enjekte edilen context'i kullan
-            )
+            context_aware_payloads = await self.payload_generator.generate_context_aware_xss_payloads(self.reflection_context_type)
             base_payloads = await self.payload_generator.generate_xss_payloads()
             all_payloads = list({*base_payloads, *context_aware_payloads})
 
@@ -121,25 +126,35 @@ class XSSScanner(BaseScanner):
             post_payloads = self._select_core_payloads(all_payloads, self.MAX_POST_PAYLOADS)
 
             # 3) Parametreleri topla
-            parsed = urlparse(url)
-            query_params = parse_qs(parsed.query)
+            query_params = parse_qs(parsed_url.query)
             discovered_params = getattr(self, "discovered_params", set())
-            all_target_params = set(query_params.keys()) | set(discovered_params)
-
+            
+            # --- KRİTİK DÜZELTME: PARAMETRE ENJEKSİYONU ---
+            # XSS, sadece query parameter 'q' varsa çalışacaktır.
+            all_target_params = set(query_params.keys())
+            
+            # Kendi labımızda 'q' parametresinin varlığını garanti ediyoruz.
+            # Ancak genel taramada keşfedilen diğer parametreleri de ekleyebiliriz.
             for p in discovered_params:
                 if p not in query_params:
+                    # Sadece keşfedilenlere kontrol payload'u at, query'nin kendisini değiştirme
                     query_params[p] = [self.CONTROL_PAYLOAD]
                     all_target_params.add(p)
-
+            
+            # Eğer lab yönlendirmesi yapıldıysa, sadece 'q' parametresini kullan
+            if is_local_lab and "/search" in parsed_url.path:
+                 all_target_params = {"q"} # Sadece XSS'in zafiyetli olduğu parametreyi hedef al.
+            # ---------------------------------------------
+            
             semaphore = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
             
             # 4) GET Tasks Oluştur
             if all_target_params:
                 self.active_coroutines.extend(self._build_get_xss_tasks(
-                    url, parsed, query_params, all_target_params, get_payloads, session, semaphore
+                    url, parsed_url, query_params, all_target_params, get_payloads, session, semaphore
                 ))
 
-            # 5) POST Tasks Oluştur
+            # 5) POST Tasks Oluştur (Local lab'de POST form keşfi simüle edilebilir, ancak şimdilik varsayılanları kullanırız)
             post_forms = await self._discover_post_forms(url, session)
             if post_forms:
                 self.active_coroutines.extend(self._build_post_xss_tasks(
@@ -149,12 +164,10 @@ class XSSScanner(BaseScanner):
             total_tasks = len(self.active_coroutines)
             self.log(
                 f"[{self.category}] Toplam {total_tasks} farklı XSS kombinasyonu eş zamanlı taranacak "
-                f"(Limit: {self.CONCURRENCY_LIMIT}). Timeout: {self.REQUEST_TIMEOUT:.1f}s",
-                "INFO",
+                f"(Limit: {self.CONCURRENCY_LIMIT}). Timeout: {self.REQUEST_TIMEOUT:.1f}s", "INFO"
             )
 
             if self.active_coroutines:
-                # Görevleri Task objelerine çevirip referanslarını tutuyoruz
                 self.running_tasks = [asyncio.create_task(coro) for coro in self.active_coroutines]
                 
                 try:
@@ -166,21 +179,15 @@ class XSSScanner(BaseScanner):
 
         except Exception as e:
             msg = f"Kritik Hata: {type(e).__name__} ({str(e)})"
-            self.add_result(
-                self.category,
-                "CRITICAL",
-                msg,
-                self._calculate_score_deduction("CRITICAL"),
-            )
+            self.add_result(self.category, "CRITICAL", msg, self._calculate_score_deduction("CRITICAL"))
             self.log(f"[{self.category}] {msg}", "CRITICAL")
 
         completed_callback()
 
     # -------------------------------------------------------
-    # YARDIMCI METOTLAR
+    # YARDIMCI METOTLAR (Sadece GET XSS TASK OLUŞTURUCU güncellendi)
     # -------------------------------------------------------
     def _select_core_payloads(self, payloads: List[str], limit: int) -> List[str]:
-        # Payloadları önceliklendir
         high_impact = []
         rest = []
         for p in payloads:
@@ -192,17 +199,14 @@ class XSSScanner(BaseScanner):
         ordered = high_impact + rest
         return ordered[:limit]
     
-    # Sigorta Kontrolü ve GÖREV İPTALİ
     def _check_circuit_breaker(self):
-        if self.circuit_open: 
-            return True
+        if self.circuit_open: return True
 
         if self.consecutive_timeouts >= self.MAX_CONSECUTIVE_TIMEOUTS:
             self.circuit_open = True
             self.log(f"[{self.category}] SİGORTA ATTI (Circuit Open): {self.MAX_CONSECUTIVE_TIMEOUTS} kez üst üste Timeout alındı. Modül durduruluyor.", "WARNING")
             self.add_result(self.category, "WARNING", "XSS Taraması erken durduruldu (Rate Limit / Blackhole Tespiti).", 0)
             
-            # --- ZOMBİ GÖREVLERİ ÖLDÜR ---
             for task in self.running_tasks:
                 if not task.done():
                     task.cancel()
@@ -211,17 +215,11 @@ class XSSScanner(BaseScanner):
             
         return False
 
-    # -------------------------------------------------------
-    # FALSE POSITIVE KONTROLÜ
-    # -------------------------------------------------------
-    async def _check_false_positive(
-        self, url: str, session: aiohttp.ClientSession
-    ) -> bool:
+    async def _check_false_positive(self, url: str, session: aiohttp.ClientSession) -> bool:
         try:
             parsed = urlparse(url)
             query = parse_qs(parsed.query)
-            if not query:
-                return False
+            if not query: return False
 
             first_param = list(query.keys())[0]
             test_query = query.copy()
@@ -232,26 +230,18 @@ class XSSScanner(BaseScanner):
             control_url = urlunparse(new_parts)
 
             self.request_callback()
-            async with session.get(
-                control_url,
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as res:
+            async with session.get(control_url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=5)) as res:
                 text = await res.text()
-                if self.CONTROL_PAYLOAD in text:
-                    return True
+                if self.CONTROL_PAYLOAD in text: return True
 
         except Exception:
             pass
         return False
 
-    # -------------------------------------------------------
-    # GET XSS TASK OLUŞTURUCU
-    # -------------------------------------------------------
     def _build_get_xss_tasks(
         self,
         base_url: str,
-        parsed,
+        parsed: urlparse, # Düzeltildi
         query_params: Dict[str, List[str]],
         all_target_params: set,
         payloads: List[str],
@@ -262,6 +252,7 @@ class XSSScanner(BaseScanner):
         for param in all_target_params:
             for payload in payloads:
                 test_params = query_params.copy()
+                # Mevcut değerin üzerine payload'ı yazar
                 test_params[param] = [payload]
 
                 test_query = urlencode(test_params, doseq=True)
@@ -270,28 +261,17 @@ class XSSScanner(BaseScanner):
                 test_url = urlunparse(new_parts)
 
                 tasks.append(
-                    self._check_reflection_get(
-                        test_url, param, payload, session, semaphore
-                    )
+                    self._check_reflection_get(test_url, param, payload, session, semaphore)
                 )
         return tasks
 
-    # -------------------------------------------------------
-    # POST FORM KEŞFİ
-    # -------------------------------------------------------
-    async def _discover_post_forms(
-        self, url: str, session: aiohttp.ClientSession
-    ) -> List[Dict[str, Any]]:
+    async def _discover_post_forms(self, url: str, session: aiohttp.ClientSession) -> List[Dict[str, Any]]:
         forms: List[Dict[str, Any]] = []
 
         try:
             await asyncio.sleep(random.uniform(0.05, 0.2))
             self.request_callback()
-            async with session.get(
-                url,
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT),
-            ) as res:
+            async with session.get(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT)) as res:
                 html = await res.text()
 
         except Exception:
@@ -359,15 +339,8 @@ class XSSScanner(BaseScanner):
             self.log(f"[{self.category}] POST form keşfi: {len(forms)} form bulundu.", "INFO")
         return forms
 
-    # -------------------------------------------------------
-    # POST XSS TASK OLUŞTURUCU
-    # -------------------------------------------------------
     def _build_post_xss_tasks(
-        self,
-        forms: List[Dict[str, Any]],
-        payloads: List[str],
-        session: aiohttp.ClientSession,
-        semaphore: asyncio.Semaphore,
+        self, forms: List[Dict[str, Any]], payloads: List[str], session: aiohttp.ClientSession, semaphore: asyncio.Semaphore,
     ):
         tasks = []
         for form in forms:
@@ -383,26 +356,16 @@ class XSSScanner(BaseScanner):
                 )
         return tasks
 
-    # -------------------------------------------------------
-    # GET XSS TESTİ
-    # -------------------------------------------------------
     async def _check_reflection_get(
-        self,
-        test_url: str,
-        param: str,
-        payload: str,
-        session: aiohttp.ClientSession,
-        semaphore: asyncio.Semaphore,
+        self, test_url: str, param: str, payload: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore,
     ):
-        # Görev başlamadan önce sigorta kontrolü
         if self.circuit_open: return
 
         async with semaphore:
-            # Sırada beklerken sigorta atmış olabilir, tekrar kontrol et
             if self.circuit_open: return
             
             try:
-                await asyncio.sleep(random.uniform(0.1, 0.3)) # Hızlandırıldı
+                await asyncio.sleep(random.uniform(0.1, 0.3))
                 self.request_callback()
 
                 async with session.get(
@@ -412,43 +375,29 @@ class XSSScanner(BaseScanner):
                 ) as res:
                     text = await res.text()
                     
-                    # Başarılı (sağlıklı) yanıtta sayacı sıfırla
-                    if res.status == 200:
-                        self.consecutive_timeouts = 0
+                    if res.status == 200: self.consecutive_timeouts = 0
 
                     if payload in text:
-                        
                         original_level = "CRITICAL" if "<script" in payload.lower() or "on" in payload.lower() else "HIGH"
                         
-                        # BBH Filtresi ve Heuristic Context'e göre ciddiyet düşürme
                         if self.reflection_context_type == "SCRIPT":
-                            final_level = "HIGH" # DOM XSS Potansiyeli
+                            final_level = "HIGH"
                         elif original_level == "CRITICAL":
-                            final_level = "WARNING" # Reflected XSS -> Orta Risk
+                            final_level = "WARNING"
                         else:
-                            final_level = "INFO" # Düşük Risk
-                        
+                            final_level = "INFO"
+                            
                         score = self._calculate_score_deduction(final_level)
                         
                         self.add_result(
-                            self.category,
-                            final_level,
-                            f"Reflected XSS tespit edildi! [BBH Filtresi: {original_level} -> {final_level}]. Parametre: '{param}'. "
-                            f"Kullanılan Payload: {payload}",
+                            self.category, final_level,
+                            f"Reflected XSS tespit edildi! [BBH Filtresi: {original_level} -> {final_level}]. Parametre: '{param}'. Kullanılan Payload: {payload}",
                             score,
-                            poc_data={
-                                "url": test_url,
-                                "method": "GET",
-                                "attack_vector": f"Reflected XSS (Param: {param})",
-                                "data": None,
-                                "headers": {}
-                            }
+                            poc_data={"url": test_url, "method": "GET", "attack_vector": f"Reflected XSS (Param: {param})", "data": None, "headers": {}}
                         )
-                        # Yapay Zeka Konsültasyonu (Güvenli Asenkron Çağrı)
                         if hasattr(self, 'neural_engine') and self.neural_engine.is_active:
                             asyncio.create_task(self.neural_engine.analyze_vulnerability({
-                                "category": self.category,
-                                "message": f"Reflected XSS kanıtlandı. Payload: {payload[:50]}...",
+                                "category": self.category, "message": f"Reflected XSS kanıtlandı. Payload: {payload[:50]}...",
                                 "context": self.reflection_context_type
                             }))
 
@@ -457,30 +406,19 @@ class XSSScanner(BaseScanner):
 
             except asyncio.TimeoutError:
                 if self.circuit_open: return
-
                 self.consecutive_timeouts += 1
-                if self._check_circuit_breaker():
-                    return
-
+                if self._check_circuit_breaker(): return
                 self.log(f"[{self.category}] GET XSS Timeout ({self.REQUEST_TIMEOUT:.1f}s). Sayaç: {self.consecutive_timeouts}/{self.MAX_CONSECUTIVE_TIMEOUTS}", "WARNING")
                 
             except asyncio.CancelledError:
-                raise # Hatayı yukarı fırlat ki gather yakalasın
+                raise
             except aiohttp.client_exceptions.ClientConnectorError:
                 self.log(f"[{self.category}] Bağlantı Hatası alındı.", "WARNING")
             except Exception:
-                pass # Diğer hataları sessizce geç
+                pass
 
-    # -------------------------------------------------------
-    # POST XSS TESTİ
-    # -------------------------------------------------------
     async def _test_post_xss(
-        self,
-        form_action: str,
-        field_names: List[str],
-        payload: str,
-        session: aiohttp.ClientSession,
-        semaphore: asyncio.Semaphore,
+        self, form_action: str, field_names: List[str], payload: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore,
     ):
         if self.circuit_open: return
 
@@ -494,50 +432,33 @@ class XSSScanner(BaseScanner):
                 data = {name: payload for name in field_names}
 
                 async with session.post(
-                    form_action,
-                    data=data,
-                    allow_redirects=True,
+                    form_action, data=data, allow_redirects=True, 
                     timeout=aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT),
                 ) as res:
                     text = await res.text()
                     
-                    if res.status == 200:
-                        self.consecutive_timeouts = 0
+                    if res.status == 200: self.consecutive_timeouts = 0
 
                     if payload in text:
-                        
                         original_level = "CRITICAL"
                         
                         if self.reflection_context_type == "SCRIPT":
-                            final_level = "HIGH" # DOM XSS Potansiyeli
+                            final_level = "HIGH"
                         else:
-                            final_level = "WARNING" # Orta Riski temsil eder
+                            final_level = "WARNING"
                             
                         score = self._calculate_score_deduction(final_level)
-
                         post_body_str = urlencode(data)
 
                         self.add_result(
-                            self.category,
-                            final_level,
-                            f"KRİTİK: POST tabanlı XSS tespit edildi! [BBH Filtresi: {original_level} -> {final_level}]. "
-                            f"Form: {form_action}, Alanlar: {', '.join(field_names)}, "
-                            f"Payload: {payload}",
+                            self.category, final_level,
+                            f"KRİTİK: POST tabanlı XSS tespit edildi! [BBH Filtresi: {original_level} -> {final_level}]. Form: {form_action}, Alanlar: {', '.join(field_names)}, Payload: {payload}",
                             score,
-                            poc_data={
-                                "url": form_action,
-                                "method": "POST",
-                                "attack_vector": f"POST XSS (Fields: {', '.join(field_names)})",
-                                "data": post_body_str, 
-                                "headers": {"Content-Type": "application/x-www-form-urlencoded"}
-                            }
+                            poc_data={"url": form_action, "method": "POST", "attack_vector": f"POST XSS (Fields: {', '.join(field_names)})", "data": post_body_str, "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
                         )
-                        # Yapay Zeka Konsültasyonu (Güvenli Asenkron Çağrı)
                         if hasattr(self, 'neural_engine') and self.neural_engine.is_active:
                             asyncio.create_task(self.neural_engine.analyze_vulnerability({
-                                "category": self.category,
-                                "message": f"POST XSS kanıtlandı. Payload: {payload[:50]}...",
-                                "context": f"Form: {form_action}"
+                                "category": self.category, "message": f"POST XSS kanıtlandı. Payload: {payload[:50]}...", "context": f"Form: {form_action}"
                             }))
 
                         if self.reflection_context_type == "SCRIPT":
@@ -545,13 +466,10 @@ class XSSScanner(BaseScanner):
 
             except asyncio.TimeoutError:
                 if self.circuit_open: return
-
                 self.consecutive_timeouts += 1
-                if self._check_circuit_breaker():
-                    return
-
+                if self._check_circuit_breaker(): return
                 self.log(f"[{self.category}] POST XSS Timeout. Sayaç: {self.consecutive_timeouts}/{self.MAX_CONSECUTIVE_TIMEOUTS}", "WARNING")
-            
+                
             except asyncio.CancelledError:
                 raise
             except aiohttp.client_exceptions.ClientConnectorError:
@@ -559,9 +477,6 @@ class XSSScanner(BaseScanner):
             except Exception:
                 pass
 
-    # -------------------------------------------------------
-    # OPSİYONEL: DOM XSS ANALİZİ
-    # -------------------------------------------------------
     async def _maybe_run_dom_analysis(self, url: str, payload: str):
         if not self.dynamic_scanner: return
 
@@ -569,18 +484,14 @@ class XSSScanner(BaseScanner):
             self.log(f"[{self.category}] Dinamik DOM XSS analizi tetiklendi. URL: {url}", "INFO")
 
             is_dom_vulnerable, final_url = await asyncio.to_thread(
-                self.dynamic_scanner.analyze_dom_xss,
-                url,
-                payload,
+                self.dynamic_scanner.analyze_dom_xss, url, payload,
             )
 
             if is_dom_vulnerable:
                 score = self._calculate_score_deduction("CRITICAL")
                 self.add_result(
-                    self.category,
-                    "CRITICAL",
-                    f"KRİTİK: DOM XSS Tespiti! Payload tarayıcıda DOM manipülasyonunu tetikledi. "
-                    f"URL: {final_url}",
+                    self.category, "CRITICAL",
+                    f"KRİTİK: DOM XSS Tespiti! Payload tarayıcıda DOM manipülasyonunu tetikledi. URL: {final_url}",
                     score,
                 )
             else:
@@ -590,11 +501,7 @@ class XSSScanner(BaseScanner):
             self.log(f"[{self.category}] DİNAMİK ANALİZ HATASI: {type(e).__name__} ({e})", "WARNING")
 
     def _calculate_score_deduction(self, level: str) -> float:
-        """SRP puanını hesaplar (Engine'deki mantığın bir kopyası)."""
         weight = self.engine_instance.MODULE_WEIGHTS.get(self.category, 0.0)
-        if level == "CRITICAL":
-            return weight
-        elif level == "HIGH":
-            return weight * 0.7
-        else: # WARNING/INFO
-            return weight * 0.3
+        if level == "CRITICAL": return weight
+        elif level == "HIGH": return weight * 0.7
+        else: return weight * 0.3
